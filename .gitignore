@@ -14,3 +14,4 @@ coverage/
 uploads/
 tmp/
 prila-9c4ed-firebase-adminsdk-fbsvc-69eb21f5da.json
+*firebase-adminsdk*.json
