@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+.env
+.env.*
+!.env.example
+**/*service-account*.json
+*.pem
+uploads/
+tmp/
+prila-9c4ed-firebase-adminsdk-fbsvc-69eb21f5da.json
