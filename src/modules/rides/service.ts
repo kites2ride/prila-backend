@@ -7,7 +7,8 @@ import { City } from '../app/model.js';
 import { Pilot, Rider } from '../auth/model.js';
 import { CouponRedemption } from '../coupons/model.js';
 import { calculateFare } from './fare.js';
-import { estimateDurationSec, haversineM } from './geo.js';
+import { routeForEstimate } from '../maps/service.js';
+import { assertPilotInServiceArea, assertTripInServiceArea } from '../zones/service.js';
 import {
   getDispatchConfig,
   getSurgeMultiplier,
@@ -112,20 +113,27 @@ export async function estimate(riderId: string, body: {
   const flags = await getCustomerFlags();
   const matching = await getMatchingConfig();
 
-  let cityId = body.cityId;
+  // Geo-fence first (before any paid Google call). When enforced, the city comes from the pickup zone.
+  const zoneCityId = await assertTripInServiceArea(
+    { lat: body.pickup.lat, lng: body.pickup.lng },
+    { lat: body.drop.lat, lng: body.drop.lng },
+    body.serviceType,
+  );
+  let cityId = zoneCityId ?? body.cityId;
   if (!cityId) {
     const city = await City.findOne({ enabled: true }).lean();
     if (!city) throw new AppError('NO_CITY', 'No serviceable city', 400);
     cityId = String(city._id);
   }
 
-  const distanceM = Math.round(
-    haversineM(
-      { lat: body.pickup.lat, lng: body.pickup.lng },
-      { lat: body.drop.lat, lng: body.drop.lng },
-    ),
+  // One Compute Routes call per estimate (cached per pickup/drop/mode); falls back to
+  // straight-line distance if Google is off/down. Reused for the ride — never recomputed live.
+  const route = await routeForEstimate(
+    { lat: body.pickup.lat, lng: body.pickup.lng },
+    { lat: body.drop.lat, lng: body.drop.lng },
+    body.serviceType,
   );
-  const durationSec = estimateDurationSec(distanceM);
+  const { distanceM, durationSec } = route;
 
   const shaktiRequested = Boolean(body.shakti && flags.prila_shakti);
   if (shaktiRequested) {
@@ -176,6 +184,8 @@ export async function estimate(riderId: string, body: {
     },
     distanceM,
     durationSec,
+    routePolyline: route.polyline,
+    routeSource: route.source,
     fare,
     expiresAt,
     couponCode: fare.couponCode,
@@ -189,6 +199,7 @@ export async function estimate(riderId: string, body: {
     expiresInSec: matching.quoteTtlSec,
     distanceM,
     durationSec,
+    route: { polyline: route.polyline, source: route.source },
     fare,
     shakti: shaktiRequested,
     currency: 'INR',
@@ -220,6 +231,12 @@ export async function book(
   if (quote.signature !== expectedSig) {
     throw new AppError('QUOTE_INVALID', 'Quote signature mismatch', 400);
   }
+  // Zones may have changed since the estimate (quote TTL) — re-check, no Google calls.
+  const [pLng, pLat] = quote.pickup?.location?.coordinates ?? [];
+  const [dLng, dLat] = quote.drop?.location?.coordinates ?? [];
+  if (pLat !== undefined && pLng !== undefined && dLat !== undefined && dLng !== undefined) {
+    await assertTripInServiceArea({ lat: pLat, lng: pLng }, { lat: dLat, lng: dLng }, quote.serviceType);
+  }
 
   const otp = String(randomInt(1000, 9999));
   const matching = await getMatchingConfig();
@@ -238,6 +255,8 @@ export async function book(
     drop: quote.drop,
     distanceM: quote.distanceM ?? 0,
     durationSec: quote.durationSec ?? 0,
+    routePolyline: quote.routePolyline ?? null,
+    routeSource: quote.routeSource ?? 'haversine',
     fare: quote.fare,
     fareTotalPaise: quote.fare?.totalPaise ?? 0,
     platformRevenuePaise: quote.fare?.platformFeePaise ?? 0,
@@ -635,9 +654,12 @@ export async function setPilotOnline(pilotId: string, online: boolean, loc?: { l
   if (online) {
     const { assertPilotCanGoOnline } = await import('../ledger/service.js');
     await assertPilotCanGoOnline(pilotId);
+    const pilot = await Pilot.findById(pilotId).select({ vehicleType: 1 }).lean();
+    await assertPilotInServiceArea(loc, pilot?.vehicleType);
   }
   const patch: Record<string, unknown> = { online, idle: online ? true : false };
-  if (loc) {
+  // Only trust a location for going online; going offline must not move the pilot.
+  if (loc && online) {
     patch.location = point(loc.lng, loc.lat);
   }
   await Pilot.updateOne({ _id: pilotId }, { $set: patch });
@@ -707,6 +729,7 @@ export function serializeRide(
     drop: o.drop,
     distanceM: o.distanceM,
     durationSec: o.durationSec,
+    routePolyline: o.routePolyline ?? null,
     fare: o.fare,
     fareTotalPaise: o.fareTotalPaise,
     pilotNetPaise: o.pilotNetPaise,

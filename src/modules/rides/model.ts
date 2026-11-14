@@ -81,6 +81,9 @@ const rideSchema = new Schema(
     },
     distanceM: { type: Number, required: true },
     durationSec: { type: Number, required: true },
+    /** Google encoded polyline from the estimate; null when straight-line fallback. */
+    routePolyline: { type: String, default: null },
+    routeSource: { type: String, enum: ['google', 'haversine'], default: 'haversine' },
     fare: fareBreakdownSchema,
     fareTotalPaise: { type: Number, default: 0 },
     platformRevenuePaise: { type: Number, default: 0 },
@@ -141,6 +144,8 @@ const quoteSchema = new Schema(
     drop: { name: String, address: String, location: pointSchema },
     distanceM: Number,
     durationSec: Number,
+    routePolyline: { type: String, default: null },
+    routeSource: { type: String, enum: ['google', 'haversine'], default: 'haversine' },
     fare: fareBreakdownSchema,
     expiresAt: { type: Date, required: true, index: true },
     usedAt: { type: Date },

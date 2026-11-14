@@ -47,7 +47,11 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get('/admin/zones', async (req, reply) => {
     const cityId = (req.query as { cityId?: string }).cityId;
-    return reply.send(ok({ items: await adminService.listZones(cityId) }));
+    const [items, enforcement] = await Promise.all([
+      adminService.listZones(cityId),
+      adminService.zoneEnforcementStatus(),
+    ]);
+    return reply.send(ok({ items, enforcement }));
   });
 
   app.post('/admin/zones', async (req, reply) => {

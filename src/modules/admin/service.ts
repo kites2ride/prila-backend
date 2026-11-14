@@ -12,6 +12,8 @@ import {
 import { Pilot, Rider } from '../auth/model.js';
 import { Ride } from '../rides/model.js';
 import { istDayBounds } from './ist.js';
+import { checkPolygon } from '../zones/geo.js';
+import { getZonesConfig, invalidateZoneCaches, zonesConfigured } from '../zones/service.js';
 import type {
   cityUpsertSchema,
   commissionUpsertSchema,
@@ -165,6 +167,7 @@ export async function upsertCity(actor: string, body: z.infer<typeof cityUpsertS
     : await City.create(payload);
   if (!doc) throw new AppError('NOT_FOUND', 'City not found', 404);
   configCache.invalidatePrefix('bootstrap:');
+  invalidateZoneCaches();
   await AdminAuditLog.create({
     actor,
     action: id ? 'city.update' : 'city.create',
@@ -183,24 +186,53 @@ export async function listZones(cityId?: string) {
     cityId: String(z.cityId),
     name: z.name,
     enabled: z.enabled,
+    type: z.type ?? 'service',
+    services: z.services ?? [],
+    district: z.district ?? '',
+    version: z.version ?? 1,
+    areaKm2: z.areaKm2 ?? null,
     coordinates: z.polygon?.coordinates ?? [],
+    updatedAt: (z as { updatedAt?: Date }).updatedAt ?? null,
   }));
+}
+
+export async function zoneEnforcementStatus() {
+  const cfg = await getZonesConfig();
+  const configured = await zonesConfigured();
+  return { enforce: cfg.enforce, serviceZonesExist: configured, active: cfg.enforce && configured };
 }
 
 export async function upsertZone(actor: string, body: z.infer<typeof zoneUpsertSchema>, id?: string) {
   if (!Types.ObjectId.isValid(body.cityId)) throw new AppError('VALIDATION_ERROR', 'Invalid cityId', 400);
+  if (id && !Types.ObjectId.isValid(id)) throw new AppError('NOT_FOUND', 'Zone not found', 404);
+  if (!(await City.exists({ _id: body.cityId }))) throw new AppError('VALIDATION_ERROR', 'Unknown city', 400);
+  const shape = checkPolygon(body.coordinates);
+  if (!shape.ok) throw new AppError('VALIDATION_ERROR', shape.message, 400);
   const payload = {
     cityId: body.cityId,
     name: body.name,
     enabled: body.enabled,
-    polygon: { type: 'Polygon' as const, coordinates: body.coordinates },
+    type: body.type,
+    services: body.services,
+    district: body.district,
+    areaKm2: shape.areaKm2,
+    polygon: { type: 'Polygon' as const, coordinates: [shape.ring] },
   };
   const before = id ? await Zone.findById(id).lean() : null;
+  if (id && !before) throw new AppError('NOT_FOUND', 'Zone not found', 404);
+  if (before && body.expectedVersion !== undefined && (before.version ?? 1) !== body.expectedVersion) {
+    throw new AppError('VERSION_CONFLICT', 'Someone else changed this zone. Reload and try again.', 409);
+  }
   const doc = id
-    ? await Zone.findByIdAndUpdate(id, payload, { returnDocument: 'after' })
-    : await Zone.create(payload);
-  if (!doc) throw new AppError('NOT_FOUND', 'Zone not found', 404);
-  configCache.invalidatePrefix('bootstrap:');
+    ? await Zone.findOneAndUpdate(
+        // legacy zones (pre-versioning) have no version field
+        before?.version == null ? { _id: id, version: { $exists: false } } : { _id: id, version: before.version },
+        before?.version == null ? { $set: { ...payload, version: 2 } } : { $set: payload, $inc: { version: 1 } },
+        { returnDocument: 'after' },
+      )
+    : await Zone.create({ ...payload, version: 1 });
+  if (!doc) throw new AppError('VERSION_CONFLICT', 'Someone else changed this zone. Reload and try again.', 409);
+  invalidateZoneCaches();
   await AdminAuditLog.create({
     actor,
     action: id ? 'zone.update' : 'zone.create',
@@ -208,7 +240,7 @@ export async function upsertZone(actor: string, body: z.infer<typeof zoneUpsertS
     before,
     after: doc.toObject(),
   });
-  return { id: String(doc._id) };
+  return { id: String(doc._id), version: doc.version, areaKm2: doc.areaKm2 };
 }
 
 export async function listServices() {

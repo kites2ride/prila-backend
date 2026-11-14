@@ -13,6 +13,8 @@ import {
   defaultAppUpdate,
   defaultCustomerConfig,
   defaultDispatch,
+  defaultMaps,
+  defaultZones,
   defaultHomePromo,
   defaultMaintenance,
   defaultMatching,
@@ -130,6 +132,8 @@ async function seed() {
     { key: 'pilot_quality' as const, value: defaultPilotQuality },
     { key: 'support' as const, value: defaultSupport },
     { key: 'maintenance' as const, value: defaultMaintenance },
+    { key: 'maps' as const, value: defaultMaps },
+    { key: 'zones' as const, value: defaultZones },
   ];
 
   for (const c of configs) {

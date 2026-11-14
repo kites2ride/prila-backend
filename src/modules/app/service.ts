@@ -14,6 +14,7 @@ import {
   type bootstrapQuerySchema,
 } from './schemas.js';
 import type { z } from 'zod';
+import { serviceAreaFor } from '../zones/service.js';
 
 type ConfigKey = z.infer<typeof configKeySchema>;
 type BootstrapQuery = z.infer<typeof bootstrapQuerySchema>;
@@ -25,6 +26,12 @@ async function getSingleton(key: ConfigKey): Promise<ConfigSingletonDoc | null> 
   const doc = await ConfigSingleton.findOne({ key });
   if (doc) configCache.set(cacheKey, doc);
   return doc;
+}
+
+/** Raw stored value for a config key (cached, invalidated on patch). undefined when never set. */
+export async function getConfigValue(key: ConfigKey): Promise<unknown> {
+  const doc = await getSingleton(key);
+  return doc?.value;
 }
 
 export async function getConfig(key: ConfigKey) {
@@ -174,6 +181,11 @@ export async function bootstrap(query: BootstrapQuery) {
           })),
         }
       : null,
+    /** Display hint only — server enforces on estimate / book / go-online. null when no location sent. */
+    serviceArea:
+      query.lat !== undefined && query.lng !== undefined
+        ? await serviceAreaFor(query.app, { lat: query.lat, lng: query.lng })
+        : null,
     home: query.app === 'customer' ? appValue.home : undefined,
     matchingHints: {
       acceptTimeoutSec: matchingValue.acceptTimeoutSec ?? 15,

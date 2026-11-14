@@ -54,6 +54,8 @@ const envSchema = z.object({
   R2_BUCKET: z.string().optional().default(''),
   R2_PUBLIC_BASE_URL: z.string().optional().default(''),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional().default(''),
+  /** Server-only Google key (Places New, Routes, Geocoding). Empty = maps disabled, haversine fallback. */
+  GOOGLE_MAPS_SERVER_KEY: z.string().optional().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

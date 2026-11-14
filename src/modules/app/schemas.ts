@@ -19,6 +19,8 @@ export const configKeySchema = z.enum([
   'pilot_quality',
   'support',
   'maintenance',
+  'maps',
+  'zones',
 ]);
 
 export const patchConfigSchema = z.object({
@@ -84,6 +86,71 @@ export const matchingValueSchema = z.object({
   retries: z.number().int().nonnegative().default(3),
   maxSearchTimeSec: z.number().int().positive().default(120),
   quoteTtlSec: z.number().int().positive().default(120),
+});
+
+const travelMode = z.enum(['DRIVE', 'TWO_WHEELER']);
+
+/**
+ * Google Maps cost controls (server-side only). Defaults are the cheapest safe
+ * settings. Places/Geocoding ToS allow caching lat/lng for at most 30 days.
+ */
+export const mapsValueSchema = z.object({
+  /** Master switch. false = no Google calls: autocomplete/place/reverse return MAPS_UNAVAILABLE, estimate uses haversine. */
+  enabled: z.boolean().default(true),
+  autocompleteMinChars: z.number().int().min(1).max(10).default(3),
+  autocompleteRateLimitPerMin: z.number().int().min(1).max(600).default(30),
+  placeRateLimitPerMin: z.number().int().min(1).max(600).default(20),
+  reverseRateLimitPerMin: z.number().int().min(1).max(600).default(20),
+  /** Client debounce hint (ms) — apps read it from bootstrap. */
+  autocompleteDebounceMs: z.number().int().min(150).max(2000).default(400),
+  languageCode: z.string().min(2).max(10).default('en'),
+  regionCode: z.string().length(2).default('IN'),
+  /** Autocomplete bias circle radius around user location (or city centre). Max allowed by Google: 50 km. */
+  biasRadiusM: z.number().int().min(1000).max(50_000).default(20_000),
+  timeoutMs: z.number().int().min(1000).max(15_000).default(4000),
+  /** TRAFFIC_AWARE moves Compute Routes to a pricier SKU — keep false until needed. */
+  routeTrafficAware: z.boolean().default(false),
+  routeTravelModeByService: z
+    .object({ bike: travelMode, auto: travelMode, parcel: travelMode, logistics: travelMode })
+    .default({ bike: 'TWO_WHEELER', auto: 'DRIVE', parcel: 'TWO_WHEELER', logistics: 'DRIVE' }),
+  /** Same pickup/drop (~11 m grid) + mode reuses the route: refresh / service switch cost 0 calls. */
+  routeCacheTtlSec: z.number().int().min(0).max(86_400).default(900),
+  /** When Google is down/disabled: use straight-line distance × this factor (1 = legacy behaviour). */
+  routeFallbackRoadFactor: z.number().min(1).max(2).default(1),
+  reverseCacheTtlSec: z.number().int().min(0).max(30 * 86_400).default(86_400),
+  placeCacheTtlSec: z.number().int().min(0).max(30 * 86_400).default(86_400),
+});
+
+/** Geo-fencing rules. Zones themselves are a collection (admin Zones screen). */
+export const zonesValueSchema = z.object({
+  /** Master switch. Enforcement is also skipped while no enabled service zone exists (fresh install). */
+  enforce: z.boolean().default(true),
+  /** Drop must also be inside a service zone of the same city as the pickup. */
+  requireDropInside: z.boolean().default(true),
+  /** Pilots can go online only inside a service zone for their vehicle type. */
+  pilotMustBeInside: z.boolean().default(true),
+  /** Apps may draw zone outlines (GET /app/zones). */
+  showOutlineOnMap: z.boolean().default(false),
+  outOfAreaMessage: z
+    .string()
+    .min(1)
+    .max(240)
+    .default("We're not in your area yet. Prila is live in Warangal, Hanamkonda and Kazipet — more places soon!"),
+  dropOutOfAreaMessage: z
+    .string()
+    .min(1)
+    .max(240)
+    .default("We can't drop you there yet. Please choose a drop inside our service area."),
+  blockedMessage: z
+    .string()
+    .min(1)
+    .max(240)
+    .default("Pickups aren't allowed at this spot. Please move a little and try again."),
+  pilotOutOfAreaMessage: z
+    .string()
+    .min(1)
+    .max(240)
+    .default("You're outside the Prila service area. Move inside a service zone to go online."),
 });
 
 /** H3 in-memory dispatch — tune with real data. Rollback via enabled:false → $geoNear path. */
@@ -188,6 +255,10 @@ export function validateConfigValue(key: z.infer<typeof configKeySchema>, value:
       return supportValueSchema.parse(value);
     case 'maintenance':
       return maintenanceValueSchema.parse(value);
+    case 'maps':
+      return mapsValueSchema.parse(value);
+    case 'zones':
+      return zonesValueSchema.parse(value);
     default: {
       const _exhaustive: never = key;
       return _exhaustive;

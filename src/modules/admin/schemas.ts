@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { checkPolygon } from '../zones/geo.js';
 
 export const dateRangeSchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -22,13 +23,24 @@ export const cityUpsertSchema = z.object({
   services: z.array(z.enum(['bike', 'auto', 'parcel', 'logistics'])).default([]),
 });
 
-export const zoneUpsertSchema = z.object({
-  cityId: z.string().min(1),
-  name: z.string().min(1),
-  enabled: z.boolean().default(true),
-  /** GeoJSON Polygon coordinates: [[[lng,lat], ...]] */
-  coordinates: z.array(z.array(z.tuple([z.number(), z.number()]))).min(1),
-});
+export const zoneUpsertSchema = z
+  .object({
+    cityId: z.string().min(1),
+    name: z.string().trim().min(1).max(80),
+    enabled: z.boolean().default(true),
+    type: z.enum(['service', 'blocked']).default('service'),
+    /** Empty = applies to all services. */
+    services: z.array(z.enum(['bike', 'auto', 'parcel', 'logistics'])).max(4).default([]),
+    district: z.string().trim().max(60).default(''),
+    /** GeoJSON Polygon coordinates: [[[lng,lat], ...]] — one outer ring, open or closed. */
+    coordinates: z.array(z.array(z.tuple([z.number(), z.number()]))).min(1),
+    /** Optimistic lock for edits: the version the editor loaded. */
+    expectedVersion: z.number().int().positive().optional(),
+  })
+  .superRefine((v, ctx) => {
+    const res = checkPolygon(v.coordinates);
+    if (!res.ok) ctx.addIssue({ code: 'custom', path: ['coordinates'], message: res.message });
+  });
 
 export const servicePatchSchema = z.object({
   name: z.string().min(1).optional(),

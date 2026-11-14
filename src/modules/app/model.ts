@@ -17,6 +17,8 @@ const configSingletonSchema = new Schema(
         'pilot_quality',
         'support',
         'maintenance',
+        'maps',
+        'zones',
       ],
     },
     version: { type: Number, default: 1 },
@@ -47,6 +49,14 @@ const zoneSchema = new Schema(
     cityId: { type: Schema.Types.ObjectId, ref: 'City', required: true, index: true },
     name: { type: String, required: true },
     enabled: { type: Boolean, default: true },
+    /** service = rides allowed inside; blocked = pickups not allowed (overrides service). */
+    type: { type: String, enum: ['service', 'blocked'], default: 'service', index: true },
+    /** Services this zone applies to. Empty = all services. */
+    services: [{ type: String, enum: ['bike', 'auto', 'parcel', 'logistics'] }],
+    /** Ops label, e.g. Warangal / Hanamkonda / Kazipet. */
+    district: { type: String, default: '' },
+    version: { type: Number, default: 1 },
+    areaKm2: { type: Number },
     polygon: {
       type: { type: String, enum: ['Polygon'], required: true },
       coordinates: { type: [[[Number]]], required: true },

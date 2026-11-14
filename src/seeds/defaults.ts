@@ -10,6 +10,8 @@ import {
   supportValueSchema,
   surgeValueSchema,
   pilotQualityValueSchema,
+  mapsValueSchema,
+  zonesValueSchema,
 } from '../modules/app/schemas.js';
 
 export const defaultCustomerConfig: z.infer<typeof appConfigCustomerValueSchema> =
@@ -96,3 +98,6 @@ export const defaultAppUpdate = appUpdateValueSchema.parse({
     ios: { minBuild: 0, latestBuild: 1, storeUrl: '' },
   },
 });
+
+export const defaultMaps = mapsValueSchema.parse({});
+export const defaultZones = zonesValueSchema.parse({});

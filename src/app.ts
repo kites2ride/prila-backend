@@ -20,6 +20,8 @@ import { reportRoutes } from './modules/reports/routes.js';
 import { sosRoutes } from './modules/sos/routes.js';
 import { shareRoutes } from './modules/share/routes.js';
 import { nudgeRoutes } from './modules/nudges/routes.js';
+import { mapsRoutes } from './modules/maps/routes.js';
+import { zoneRoutes } from './modules/zones/routes.js';
 import { initFcm } from './modules/push/service.js';
 import { registerJwt } from './plugins/auth.js';
 
@@ -106,6 +108,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
       await api.register(sosRoutes);
       await api.register(shareRoutes);
       await api.register(nudgeRoutes);
+      await api.register(mapsRoutes);
+      await api.register(zoneRoutes);
     },
     { prefix: '/api/v1' },
   );

@@ -83,6 +83,7 @@ export function setupTestApp() {
       ALLOW_OTP_DEBUG: 'true',
       CORS_ORIGINS: 'http://localhost:5173',
       LOG_LEVEL: 'silent',
+      GOOGLE_MAPS_SERVER_KEY: '', // never call Google from tests (maps tests mock fetch)
     });
     await connectDb();
     app = await buildApp({ logger: false });
@@ -91,6 +92,12 @@ export function setupTestApp() {
 
   beforeEach(async () => {
     configCache.clear();
+    const { clearMapsCaches } = await import('../src/modules/maps/service.js');
+    const { resetLimiter } = await import('../src/modules/maps/limiter.js');
+    const { usage } = await import('../src/modules/maps/usage.js');
+    clearMapsCaches();
+    resetLimiter();
+    usage.reset();
     const { locationStore } = await import('../src/modules/dispatch/locationStore.js');
     locationStore.clear();
     const { Ride, RideQuote } = await import('../src/modules/rides/model.js');
@@ -117,7 +124,11 @@ export function setupTestApp() {
         const { SosAlert } = await import('../src/modules/sos/model.js');
         const { AppNotification } = await import('../src/modules/push/inbox.js');
         const { NudgeRule } = await import('../src/modules/nudges/model.js');
+        const { Zone } = await import('../src/modules/app/model.js');
+        const { OutOfAreaDemand } = await import('../src/modules/zones/model.js');
         await Promise.all([
+          Zone.deleteMany({}),
+          OutOfAreaDemand.deleteMany({}),
           AnalyticsEvent.deleteMany({}),
           Report.deleteMany({}),
           SosAlert.deleteMany({}),
