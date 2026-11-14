@@ -79,7 +79,8 @@ export function attachSocket(app: FastifyInstance): Server {
     });
   }
 
-  app.decorate('io', io);
+  // Fastify 5 forbids decorate after ready/listen; assign for Socket.io after server exists.
+  Object.assign(app, { io });
   return io;
 }
 
