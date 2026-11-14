@@ -27,7 +27,9 @@ import { registerJwt } from './plugins/auth.js';
 export async function buildApp(opts?: { logger?: boolean }) {
   const e = env();
   const app = Fastify({
-    logger: opts?.logger === false ? false : createLogger(),
+    ...(opts?.logger === false
+      ? { logger: false }
+      : { loggerInstance: createLogger() }),
     trustProxy: true,
   });
 

@@ -3,7 +3,7 @@ import { env } from '../config/env.js';
 
 export function createLogger() {
   const e = env();
-  return pino({
+  const opts: pino.LoggerOptions = {
     level: e.LOG_LEVEL,
     redact: {
       paths: [
@@ -20,9 +20,12 @@ export function createLogger() {
       ],
       censor: '[REDACTED]',
     },
-    transport:
-      e.NODE_ENV === 'development'
-        ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:standard' } }
-        : undefined,
-  });
+  };
+  if (e.NODE_ENV === 'development') {
+    opts.transport = {
+      target: 'pino-pretty',
+      options: { colorize: true, translateTime: 'SYS:standard' },
+    };
+  }
+  return pino(opts);
 }
