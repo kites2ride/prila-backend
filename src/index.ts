@@ -9,10 +9,11 @@ async function main() {
   const e = loadEnv();
   await connectDb();
   const app = await buildApp();
-  await app.listen({ port: e.PORT, host: e.HOST });
+  await app.ready();
   attachSocket(app);
   await startDispatch(app);
   startNudgeCron(app.log);
+  await app.listen({ port: e.PORT, host: e.HOST });
   app.log.info(`Prila API listening on ${e.HOST}:${e.PORT}`);
 }
 
