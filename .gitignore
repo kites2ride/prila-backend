@@ -11,7 +11,7 @@ coverage/
 !.env.example
 **/*service-account*.json
 *.pem
-uploads/
+/uploads/
 tmp/
 prila-9c4ed-firebase-adminsdk-fbsvc-69eb21f5da.json
 *firebase-adminsdk*.json
