@@ -6,7 +6,6 @@ import { ZodError } from 'zod';
 import { env } from './config/env.js';
 import { fail } from './lib/envelope.js';
 import { AppError, isAppError } from './lib/errors.js';
-import { createLogger } from './lib/logger.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { appRoutes } from './modules/app/routes.js';
 import { healthRoutes } from './modules/health/routes.js';
@@ -27,9 +26,27 @@ import { registerJwt } from './plugins/auth.js';
 export async function buildApp(opts?: { logger?: boolean }) {
   const e = env();
   const app = Fastify({
-    ...(opts?.logger === false
-      ? { logger: false }
-      : { loggerInstance: createLogger() }),
+    logger:
+      opts?.logger === false
+        ? false
+        : {
+            level: e.LOG_LEVEL,
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'password',
+                'otp',
+                'code',
+                'token',
+                'refreshToken',
+                'accessToken',
+                'phone',
+                'documentUrl',
+                'location.coordinates',
+              ],
+              censor: '[REDACTED]',
+            },
+          },
     trustProxy: true,
   });
 
