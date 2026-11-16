@@ -18,12 +18,14 @@ const TRANSITIONS: Record<RideStatus, RideStatus[]> = {
   ],
   pilot_arriving: [
     'pilot_arrived',
+    'searching', // pilot cancelled → find another pilot
     'cancelled_by_rider',
     'cancelled_by_pilot',
     'cancelled_by_system',
   ],
   pilot_arrived: [
     'in_progress',
+    'searching', // pilot cancelled → find another pilot
     'cancelled_by_rider',
     'cancelled_by_pilot',
     'cancelled_by_system',

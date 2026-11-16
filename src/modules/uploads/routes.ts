@@ -19,7 +19,7 @@ async function authenticateAnyUser(req: FastifyRequest, _reply: FastifyReply) {
 export async function uploadRoutes(app: FastifyInstance) {
   app.post('/uploads/presign', { preHandler: authenticateAnyUser }, async (req, reply) => {
     const body = presignSchema.parse(req.body);
-    const data = await uploadService.createPresignedUpload(body);
+    const data = await uploadService.createPresignedUpload(body, req.user);
     return reply.send(ok(data));
   });
 }

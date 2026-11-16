@@ -9,9 +9,23 @@ const deviceSchema = new Schema(
   { _id: false },
 );
 
+const savedPlaceSchema = new Schema(
+  {
+    label: { type: String, enum: ['home', 'work'], required: true },
+    name: { type: String, required: true },
+    address: { type: String, default: '' },
+    location: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], required: true }, // [lng, lat]
+    },
+  },
+  { _id: false },
+);
+
 const riderSchema = new Schema(
   {
     phone: { type: String, required: true, unique: true, index: true },
+    savedPlaces: { type: [savedPlaceSchema], default: [] },
     name: { type: String },
     language: { type: String, default: 'en' },
     /** Explicit self-ID — never infer from name (Uber-style heuristics avoided). */
@@ -44,6 +58,24 @@ const pilotSchema = new Schema(
       default: 'not_started',
     },
     kycRejectReason: { type: String },
+    /** Doc ids the admin marked as wrong on the last rejection (pilot re-uploads these). */
+    kycRejectedDocs: [{ type: String }],
+    /** Private storage keys (kyc/<pilotId>/...). Never public URLs. */
+    kycDocs: [
+      {
+        _id: false,
+        docId: { type: String, required: true },
+        key: { type: String, required: true },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    kycSubmittedAt: { type: Date, index: true },
+    kycReviewedAt: { type: Date },
+    kycReviewedBy: { type: String },
+    /** Approved KYC selfie, shown to riders on the pilot card. */
+    photoKey: { type: String },
+    /** Count of rides this pilot cancelled after accepting (no penalty yet; visible to ops). */
+    cancelCount: { type: Number, default: 0 },
     online: { type: Boolean, default: false },
     idle: { type: Boolean, default: true },
     shaktiOptIn: { type: Boolean, default: false },

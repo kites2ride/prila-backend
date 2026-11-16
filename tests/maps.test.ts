@@ -112,7 +112,7 @@ describe('maps: autocomplete', () => {
     const res = await get(`/maps/autocomplete?q=${encodeURIComponent('  hanamkonda ')}&sessionToken=${SESSION}`, t);
     expect(res.statusCode).toBe(200);
     expect(res.json().data.suggestions).toEqual([
-      { placeId: 'ChIJhanamkonda0001', mainText: 'Hanamkonda Chowrasta', secondaryText: 'Hanamkonda, Telangana' },
+      { source: 'google', placeId: 'ChIJhanamkonda0001', mainText: 'Hanamkonda Chowrasta', secondaryText: 'Hanamkonda, Telangana' },
     ]);
     expect(calls).toHaveLength(1);
     const { url, init } = calls[0]!;
@@ -293,6 +293,19 @@ describe('maps: route inside /rides/estimate', () => {
     const ride = await Ride.findById(book.json().data.id).lean();
     expect(ride?.routeSource).toBe('google');
     expect(calls).toHaveLength(2); // booking never calls Google
+  });
+
+  it('live traffic (switch, off by default): asks for the no-traffic time too and charges the extra minutes', async () => {
+    await fareRule('bike');
+    await setMaps({ routeTrafficAware: true });
+    // 6.8 km: 21 min normally, 33 min in traffic → +12 min × ₹1.
+    google(() => ({ json: { routes: [{ distanceMeters: 6800, duration: '1980s', staticDuration: '1260s', polyline: { encodedPolyline: 'p' } }] } }));
+    const res = await estimate(await riderToken(), 'bike');
+    expect(JSON.parse(String(calls[0]!.init.body)).routingPreference).toBe('TRAFFIC_AWARE');
+    expect((calls[0]!.init.headers as Record<string, string>)['X-Goog-FieldMask']).toContain('routes.staticDuration');
+    const fare = res.json().data.fare;
+    expect(fare).toMatchObject({ timePaise: 3300, trafficExtraSec: 720, reasons: ['traffic'] });
+    expect(fare.totalPaise - fare.normalFarePaise).toBe(1200 + 500); // +₹12 traffic, + platform fee
   });
 
   it('falls back to straight-line distance when Google fails (estimate still works)', async () => {

@@ -188,7 +188,14 @@ export async function reverseGeocode(input: {
 }
 
 export type TravelMode = 'DRIVE' | 'TWO_WHEELER';
-export type RouteResult = { distanceM: number; durationSec: number; polyline: string | null };
+export type RouteResult = {
+  distanceM: number;
+  /** With live traffic when trafficAware, else typical time. */
+  durationSec: number;
+  /** Time without traffic (only returned when trafficAware). */
+  staticDurationSec: number | null;
+  polyline: string | null;
+};
 
 /** @returns null when Google finds no route between the points. */
 export async function computeRoute(input: {
@@ -214,19 +221,28 @@ export async function computeRoute(input: {
   const json = (await call(
     'computeRoutes',
     ROUTES,
-    { method: 'POST', headers: headers(FIELD_MASKS.computeRoutes), body: JSON.stringify(body) },
+    {
+      method: 'POST',
+      // staticDuration only when traffic-aware (that call is already on the pricier SKU).
+      headers: headers(input.trafficAware ? `${FIELD_MASKS.computeRoutes},routes.staticDuration` : FIELD_MASKS.computeRoutes),
+      body: JSON.stringify(body),
+    },
     input.timeoutMs,
   )) as {
-    routes?: Array<{ distanceMeters?: number; duration?: string; polyline?: { encodedPolyline?: string } }>;
+    routes?: Array<{ distanceMeters?: number; duration?: string; staticDuration?: string; polyline?: { encodedPolyline?: string } }>;
   } | null;
 
   const r = json?.routes?.[0];
   if (!r) return null;
   // proto3 JSON omits zero values: same/very close points give no distanceMeters.
-  const durationSec = Number.parseInt((r.duration ?? '0s').replace(/s$/, ''), 10);
+  const secs = (v?: string) => {
+    const n = Number.parseInt((v ?? '0s').replace(/s$/, ''), 10);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  };
   return {
     distanceM: Math.max(0, Math.round(r.distanceMeters ?? 0)),
-    durationSec: Number.isFinite(durationSec) ? Math.max(0, durationSec) : 0,
+    durationSec: secs(r.duration),
+    staticDurationSec: r.staticDuration ? secs(r.staticDuration) : null,
     polyline: r.polyline?.encodedPolyline ?? null,
   };
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { cityPricingSchema } from '../rides/pricing.js';
 import { checkPolygon } from '../zones/geo.js';
 
 export const dateRangeSchema = z.object({
@@ -21,6 +22,8 @@ export const cityUpsertSchema = z.object({
     lat: z.number(),
   }),
   services: z.array(z.enum(['bike', 'auto', 'parcel', 'logistics'])).default([]),
+  /** Night / rush-hour times + overall price cap. Omitted = keep what the city has. */
+  pricing: cityPricingSchema.optional(),
 });
 
 export const zoneUpsertSchema = z
@@ -73,6 +76,7 @@ export const farePreviewSchema = z.object({
   durationSec: z.number().nonnegative(),
   waitingSec: z.number().nonnegative().default(0),
   isNight: z.boolean().default(false),
+  rushMultiplier: z.number().min(1).max(1.5).default(1),
   applySurge: z.boolean().default(true),
 });
 

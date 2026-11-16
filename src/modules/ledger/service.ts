@@ -66,8 +66,9 @@ export async function settleRideCompletion(rideId: string) {
   wallet.lifetimeTrips += 1;
 
   if (ride.paymentMethod === 'cash') {
-    // Pilot holds cash; owes platform cut
-    wallet.duesPaise += totalPlatform;
+    // Pilot holds cash; owes platform cut. If the cash was NOT collected (e.g. parcel
+    // receiver refused), the pilot holds nothing, so no dues — ops follow up with the sender.
+    if (ride.paymentStatus === 'paid') wallet.duesPaise += totalPlatform;
   } else {
     // Online: net lands in withdrawable balance
     wallet.balancePaise += netPaise;

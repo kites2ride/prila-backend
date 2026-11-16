@@ -11,6 +11,7 @@
  *  - Enforcement is off while zones.enforce=false or no enabled service zone exists yet.
  */
 import { cellToLatLng, latLngToCell } from 'h3-js';
+import { cellBoundary } from '../dispatch/h3.js';
 import type { z } from 'zod';
 import { configCache } from '../../lib/cache.js';
 import { createLogger } from '../../lib/logger.js';
@@ -264,10 +265,33 @@ export async function outlines(cityId?: string) {
   return out;
 }
 
-export async function demandOutside(days: number, limit: number) {
+function safeBoundary(cell: string): Array<[number, number]> {
+  try {
+    return cellBoundary(cell);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turned-away demand grouped per cell. Out-of-area requests have no city, so
+ * `near` limits them to a box around a city centre (live map is per city).
+ */
+export async function demandOutside(
+  days: number,
+  limit: number,
+  near?: { lat: number; lng: number; radiusKm: number },
+) {
   const from = new Date(Date.now() - (days - 1) * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const match: Record<string, unknown> = { day: { $gte: from } };
+  if (near) {
+    const dLat = near.radiusKm / 111;
+    const dLng = near.radiusKm / (111 * Math.max(0.2, Math.cos((near.lat * Math.PI) / 180)));
+    match.lat = { $gte: near.lat - dLat, $lte: near.lat + dLat };
+    match.lng = { $gte: near.lng - dLng, $lte: near.lng + dLng };
+  }
   const rows = await OutOfAreaDemand.aggregate([
-    { $match: { day: { $gte: from } } },
+    { $match: match },
     {
       $group: {
         _id: { cell: '$cell', kind: '$kind' },
@@ -291,6 +315,8 @@ export async function demandOutside(days: number, limit: number) {
       lng: r.lng as number,
       lastAt: r.lastAt as Date,
       reasons: r.reasons as string[],
+      /** Hexagon outline [lng, lat][] so maps can draw the cell without an H3 library. */
+      boundary: safeBoundary(r._id.cell as string),
     })),
   };
 }

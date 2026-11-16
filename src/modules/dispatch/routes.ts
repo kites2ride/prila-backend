@@ -7,32 +7,24 @@ import { getDispatchConfig, getSurgeConfig } from './config.js';
 import { cellBoundary } from './h3.js';
 import { locationStore } from './locationStore.js';
 import { getHeatmap } from './surge.js';
+import { liveSnapshot } from './live.js';
+import { City } from '../app/model.js';
+import { z } from 'zod';
+
+const cityQuery = z.object({
+  cityId: z.string().refine((v) => /^[a-f\d]{24}$/i.test(v), 'cityId must be a city id'),
+});
 
 export async function dispatchRoutes(app: FastifyInstance) {
+  /** City live map (admin, polled every 5 s): pilots, live rides, counts. */
   app.get('/admin/dispatch/live', { preHandler: authenticateAdmin }, async (req, reply) => {
-    const cityId = (req.query as { cityId?: string }).cityId;
-    let pilots = locationStore.listAll().filter((p) => p.online);
-    if (cityId) pilots = pilots.filter((p) => !p.cityId || p.cityId === cityId);
-    return reply.send(
-      ok({
-        items: pilots.map((p) => ({
-          id: p.pilotId,
-          status: p.status,
-          lat: p.lat,
-          lng: p.lng,
-          cell: p.cell,
-          updatedAt: new Date(p.updatedAt).toISOString(),
-          vehicleType: p.vehicleType,
-          offerRideId: p.offerRideId,
-        })),
-        at: new Date().toISOString(),
-      }),
-    );
+    const { cityId } = cityQuery.parse(req.query);
+    if (!(await City.exists({ _id: cityId }))) throw new AppError('NOT_FOUND', 'City not found', 404);
+    return reply.send(ok(await liveSnapshot(cityId)));
   });
 
   app.get('/admin/dispatch/heatmap', { preHandler: authenticateAdmin }, async (req, reply) => {
-    const cityId = (req.query as { cityId?: string }).cityId;
-    if (!cityId) throw new AppError('VALIDATION_ERROR', 'cityId required', 400);
+    const { cityId } = cityQuery.parse(req.query);
     const cfg = await getSurgeConfig();
     const cells = await getHeatmap(cityId);
     return reply.send(

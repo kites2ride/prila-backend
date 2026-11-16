@@ -13,6 +13,8 @@ import {
   rateSchema,
   skipSchema,
   startSchema,
+  pilotCancelSchema,
+  resolvePaymentIssueSchema,
 } from './schemas.js';
 import * as rideService from './service.js';
 import { pageSchema } from '../admin/schemas.js';
@@ -58,7 +60,8 @@ export async function rideRoutes(app: FastifyInstance) {
       1,
       1,
     );
-    return reply.send(ok({ ride: list.items[0] ?? null }));
+    const ride = list.items[0] ?? null;
+    return reply.send(ok({ ride: ride ? { ...ride, pilot: await rideService.pilotCardFor(ride) } : null }));
   });
 
   app.get('/rides', { preHandler: authenticateRider }, async (req, reply) => {
@@ -69,7 +72,7 @@ export async function rideRoutes(app: FastifyInstance) {
 
   app.get('/rides/:id', { preHandler: authenticateRider }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
-    const data = await rideService.getRide(id, { id: req.user.sub, role: 'access' });
+    const data = await rideService.riderRideView(id, req.user.sub);
     return reply.send(ok(data));
   });
 
@@ -161,28 +164,29 @@ export async function rideRoutes(app: FastifyInstance) {
   app.post('/pilot/rides/:id/start', { preHandler: authenticatePilot }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     const body = startSchema.parse(req.body);
-    const data = await rideService.start(app, req.user.sub, id, body.otp);
+    const data = await rideService.start(app, req.user.sub, id, body.otp, body.cashCollected);
     return reply.send(ok(data));
   });
 
   app.post('/pilot/rides/:id/complete', { preHandler: authenticatePilot }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     const body = completeSchema.parse(req.body);
-    const data = await rideService.complete(app, req.user.sub, id, body.collectedCash);
+    const data = await rideService.complete(app, req.user.sub, id, body.collectedCash, body.notCollectedReason);
     return reply.send(ok(data));
   });
 
+  /** Pilot cancels after accepting → the rider gets another pilot automatically. */
   app.post('/pilot/rides/:id/cancel', { preHandler: authenticatePilot }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
-    const body = cancelSchema.parse(req.body);
-    const data = await rideService.cancel(
-      app,
-      { id: req.user.sub, role: 'pilot' },
-      id,
-      body.reasonCode,
-      body.reasonText,
-    );
+    const body = pilotCancelSchema.parse(req.body);
+    const data = await rideService.pilotCancel(app, req.user.sub, id, body.reasonCode, body.reasonText);
     return reply.send(ok(data));
+  });
+
+  /** Parcel: the sender's number so the pilot can call (e.g. receiver refuses to pay). */
+  app.get('/pilot/rides/:id/sender-contact', { preHandler: authenticatePilot }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    return reply.send(ok(await rideService.senderContact(req.user.sub, id)));
   });
 
   app.post('/pilot/rides/:id/rate', { preHandler: authenticatePilot }, async (req, reply) => {
@@ -199,6 +203,19 @@ export async function rideRoutes(app: FastifyInstance) {
     const filter = status ? { status } : {};
     const data = await rideService.listRides(filter, q.page, q.limit);
     return reply.send(ok(data));
+  });
+
+  /** Cash not collected (e.g. parcel receiver refused) — ops follow up with the sender. */
+  app.get('/admin/rides/payment-issues', { preHandler: authenticateAdmin }, async (req, reply) => {
+    const q = pageSchema.parse(req.query);
+    const open = (req.query as { state?: string }).state !== 'resolved';
+    return reply.send(ok(await rideService.listPaymentIssues(open, q.page, q.limit)));
+  });
+
+  app.post('/admin/rides/:id/payment-issue/resolve', { preHandler: authenticateAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const body = resolvePaymentIssueSchema.parse(req.body);
+    return reply.send(ok(await rideService.resolvePaymentIssue(req.user.sub, id, body.note)));
   });
 
   app.get('/admin/rides/:id', { preHandler: authenticateAdmin }, async (req, reply) => {

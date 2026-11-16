@@ -21,6 +21,31 @@ export const bookSchema = z.object({
   quoteId: z.string().min(8),
   idempotencyKey: z.string().min(8).max(64),
   paymentMethod: z.enum(['cash', 'upi']).default('cash'),
+  /** Parcels: who pays — sender at pickup or receiver at drop. Ignored for rides. */
+  payAt: z.enum(['pickup', 'drop']).optional(),
+});
+
+export const PILOT_CANCEL_REASONS = [
+  'vehicle_problem',
+  'pickup_too_far',
+  'rider_not_reachable',
+  'personal_emergency',
+  'sender_refused_payment', // parcel, pay at pickup: ends the request instead of re-searching
+  'other',
+] as const;
+
+export const pilotCancelSchema = z
+  .object({
+    reasonCode: z.enum(PILOT_CANCEL_REASONS),
+    reasonText: z.string().trim().max(200).optional(),
+  })
+  .refine((v) => v.reasonCode !== 'other' || (v.reasonText?.length ?? 0) >= 3, {
+    message: 'Tell us the reason',
+    path: ['reasonText'],
+  });
+
+export const resolvePaymentIssueSchema = z.object({
+  note: z.string().trim().min(3).max(300),
 });
 
 export const cancelSchema = z.object({
@@ -40,11 +65,15 @@ export const skipSchema = z.object({
 export const startSchema = z.object({
   otp: z.string().regex(/^\d{4}$/),
   idempotencyKey: z.string().min(8).max(64),
+  /** Parcel, pay at pickup: pilot confirms the sender paid before starting. */
+  cashCollected: z.boolean().optional(),
 });
 
 export const completeSchema = z.object({
   idempotencyKey: z.string().min(8).max(64),
   collectedCash: z.boolean().default(true),
+  /** Why cash was not collected (collectedCash=false). */
+  notCollectedReason: z.enum(['receiver_refused', 'rider_refused', 'other']).optional(),
 });
 
 export const rateSchema = z.object({

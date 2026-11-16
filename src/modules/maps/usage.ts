@@ -15,7 +15,7 @@ let startedAt = new Date();
 let googleCalls = zero();
 let cacheHits = zero();
 let errors = zero();
-let skipped = { belowMinChars: 0, rateLimited: 0, routeFallback: 0 };
+let skipped = { belowMinChars: 0, rateLimited: 0, routeFallback: 0, localHits: 0 };
 
 export const usage = {
   google(op: MapsOp) {
@@ -46,6 +46,6 @@ export const usage = {
     googleCalls = zero();
     cacheHits = zero();
     errors = zero();
-    skipped = { belowMinChars: 0, rateLimited: 0, routeFallback: 0 };
+    skipped = { belowMinChars: 0, rateLimited: 0, routeFallback: 0, localHits: 0 };
   },
 };

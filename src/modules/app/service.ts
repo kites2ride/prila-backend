@@ -15,6 +15,7 @@ import {
 } from './schemas.js';
 import type { z } from 'zod';
 import { serviceAreaFor } from '../zones/service.js';
+import { getMapsConfig } from '../maps/config.js';
 
 type ConfigKey = z.infer<typeof configKeySchema>;
 type BootstrapQuery = z.infer<typeof bootstrapQuerySchema>;
@@ -134,6 +135,7 @@ export async function bootstrap(query: BootstrapQuery) {
   ]);
 
   const appCfg = query.app === 'customer' ? customerCfg : pilotCfg;
+  const mapsCfg = await getMapsConfig();
   const update = await getUpdatePolicy(query.app, query.platform, query.build);
   const city = await resolveCity(query.lat, query.lng);
 
@@ -187,6 +189,11 @@ export async function bootstrap(query: BootstrapQuery) {
         ? await serviceAreaFor(query.app, { lat: query.lat, lng: query.lng })
         : null,
     home: query.app === 'customer' ? appValue.home : undefined,
+    /** Client hints for the search screen (server still enforces min chars). */
+    maps: {
+      autocompleteMinChars: mapsCfg.autocompleteMinChars,
+      autocompleteDebounceMs: mapsCfg.autocompleteDebounceMs,
+    },
     matchingHints: {
       acceptTimeoutSec: matchingValue.acceptTimeoutSec ?? 15,
       searchRadiusM: matchingValue.searchRadiusM ?? 3000,

@@ -103,6 +103,8 @@ export const mapsValueSchema = z.object({
   reverseRateLimitPerMin: z.number().int().min(1).max(600).default(20),
   /** Client debounce hint (ms) — apps read it from bootstrap. */
   autocompleteDebounceMs: z.number().int().min(150).max(2000).default(400),
+  /** Ops landmarks are searched first (free). This many local hits → Google is not called at all. */
+  localMinHitsToSkipGoogle: z.number().int().min(0).max(10).default(3),
   languageCode: z.string().min(2).max(10).default('en'),
   regionCode: z.string().length(2).default('IN'),
   /** Autocomplete bias circle radius around user location (or city centre). Max allowed by Google: 50 km. */
@@ -173,7 +175,7 @@ export const dispatchValueSchema = z.object({
 });
 
 export const surgeValueSchema = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(true),
   h3Resolution: z.number().int().min(0).max(15).default(7),
   windowMin: z.number().int().positive().default(10),
   maxMultiplier: z.number().positive().default(1.5),

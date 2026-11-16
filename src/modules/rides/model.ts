@@ -45,7 +45,13 @@ const fareBreakdownSchema = new Schema(
     timePaise: Number,
     waitingPaise: Number,
     nightMultiplier: Number,
+    rushMultiplier: Number,
     surgeMultiplier: Number,
+    trafficExtraSec: Number,
+    normalFarePaise: Number,
+    priceMultiplier: Number,
+    capped: Boolean,
+    reasons: { type: [String], default: undefined },
     minimumFarePaise: Number,
     platformFeePaise: Number,
     cancellationFeePaise: Number,
@@ -92,6 +98,41 @@ const rideSchema = new Schema(
     commissionMode: { type: String },
     paymentMethod: { type: String, enum: ['cash', 'upi'], default: 'cash' },
     paymentStatus: { type: String, enum: ['unpaid', 'paid', 'waived'], default: 'unpaid' },
+    /** Parcels only: sender pays at pickup or receiver pays at drop. Null = pay at the end (rides). */
+    payAt: { type: String, enum: ['pickup', 'drop'], default: null },
+    cashCollectedAt: { type: Date },
+    /** Cash not collected at completion (e.g. receiver refused) — ops follow up with the sender. */
+    paymentIssue: {
+      type: new Schema(
+        {
+          code: { type: String, enum: ['receiver_refused', 'rider_refused', 'other'], required: true },
+          at: { type: Date, required: true },
+          resolvedAt: { type: Date },
+          resolvedBy: { type: String },
+          resolutionNote: { type: String },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+    /** Pilots who cancelled after accepting; the ride went back to searching each time. */
+    pilotCancellations: {
+      type: [
+        new Schema(
+          {
+            pilotId: { type: Schema.Types.ObjectId, ref: 'Pilot' },
+            at: Date,
+            reasonCode: String,
+            reasonText: String,
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    /** Start of the current search (book, or re-search after a pilot cancelled). */
+    searchStartedAt: { type: Date },
+    senderContactViews: { type: Number, default: 0 },
     startOtpHash: { type: String },
     startOtpHint: { type: String }, // never return full OTP after assign except to rider once
     offeredPilotIds: [{ type: Schema.Types.ObjectId, ref: 'Pilot' }],
@@ -130,6 +171,7 @@ const rideSchema = new Schema(
 );
 
 rideSchema.index({ 'pickup.location': '2dsphere' });
+rideSchema.index({ 'paymentIssue.code': 1, 'paymentIssue.resolvedAt': 1 }, { sparse: true });
 rideSchema.index({ status: 1, updatedAt: -1 });
 rideSchema.index({ riderId: 1, status: 1 });
 rideSchema.index({ pilotId: 1, status: 1 });

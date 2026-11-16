@@ -1,4 +1,6 @@
 import { Types } from 'mongoose';
+import { readCityPricing } from '../rides/pricing.js';
+import { priceTrip } from '../rides/fare.js';
 import { AppError } from '../../lib/errors.js';
 import { configCache } from '../../lib/cache.js';
 import {
@@ -148,6 +150,7 @@ export async function listCities() {
       timezone: c.timezone,
       center: { lng: coords[0] ?? 0, lat: coords[1] ?? 0 },
       services: c.services,
+      pricing: readCityPricing(c.pricing),
     };
   });
 }
@@ -160,6 +163,7 @@ export async function upsertCity(actor: string, body: z.infer<typeof cityUpsertS
     timezone: body.timezone,
     center: { type: 'Point' as const, coordinates: [body.center.lng, body.center.lat] },
     services: body.services,
+    ...(body.pricing ? { pricing: body.pricing } : {}),
   };
   const before = id ? await City.findById(id).lean() : null;
   const doc = id
@@ -330,31 +334,38 @@ export async function previewFare(body: z.infer<typeof farePreviewSchema>) {
     serviceType: body.serviceType,
   }).lean();
   if (!rule) throw new AppError('NOT_FOUND', 'Fare rule not found', 404);
+  const city = await City.findById(body.cityId).select('pricing').lean();
+  const pricing = readCityPricing(city?.pricing);
 
-  const distanceKm = body.distanceM / 1000;
-  const durationMin = body.durationSec / 60;
-  const waitingMin = body.waitingSec / 60;
-  let subtotal =
-    rule.baseFarePaise +
-    Math.round(rule.perKmPaise * distanceKm) +
-    Math.round(rule.perMinutePaise * durationMin) +
-    Math.round(rule.waitingPerMinutePaise * waitingMin);
-  if (body.isNight) subtotal = Math.round(subtotal * rule.nightMultiplier);
-  if (body.applySurge) subtotal = Math.round(subtotal * rule.surgeMultiplier);
-  const fareBeforeMin = subtotal;
-  const total = Math.max(subtotal, rule.minimumFarePaise) + rule.platformFeePaise;
+  // Same maths as the rider estimate (rides/fare.ts), incl. the city's price cap.
+  const priced = priceTrip(rule, {
+    distanceM: body.distanceM,
+    durationSec: body.durationSec,
+    waitingSec: body.waitingSec,
+    nightMultiplier: body.isNight ? rule.nightMultiplier : 1,
+    rushMultiplier: body.rushMultiplier,
+    demandMultiplier: body.applySurge ? rule.surgeMultiplier : 1,
+    maxMultiplier: pricing.maxMultiplier,
+  });
+  const fareBeforeMin = priced.farePaise;
+  const total = Math.max(fareBeforeMin, rule.minimumFarePaise) + rule.platformFeePaise;
 
   return {
     currency: 'INR',
     breakdown: {
       baseFarePaise: rule.baseFarePaise,
-      distancePaise: Math.round(rule.perKmPaise * distanceKm),
-      timePaise: Math.round(rule.perMinutePaise * durationMin),
-      waitingPaise: Math.round(rule.waitingPerMinutePaise * waitingMin),
+      distancePaise: priced.distancePaise,
+      timePaise: priced.timePaise,
+      waitingPaise: priced.waitingPaise,
       nightApplied: body.isNight,
       surgeApplied: body.applySurge,
       nightMultiplier: rule.nightMultiplier,
+      rushMultiplier: priced.rushMultiplier,
       surgeMultiplier: rule.surgeMultiplier,
+      normalFarePaise: priced.normalFarePaise,
+      priceMultiplier: priced.priceMultiplier,
+      capped: priced.capped,
+      maxMultiplier: pricing.maxMultiplier,
       beforeMinimumPaise: fareBeforeMin,
       minimumFarePaise: rule.minimumFarePaise,
       platformFeePaise: rule.platformFeePaise,

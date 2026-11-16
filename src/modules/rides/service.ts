@@ -133,7 +133,7 @@ export async function estimate(riderId: string, body: {
     { lat: body.drop.lat, lng: body.drop.lng },
     body.serviceType,
   );
-  const { distanceM, durationSec } = route;
+  const { distanceM, durationSec, normalDurationSec } = route;
 
   const shaktiRequested = Boolean(body.shakti && flags.prila_shakti);
   if (shaktiRequested) {
@@ -143,25 +143,22 @@ export async function estimate(riderId: string, body: {
     }
   }
 
+  // Live "few pilots nearby" surge is read once here and snapshotted into the quote
+  // (never re-read at book/complete). It is applied before the coupon and inside the
+  // city's price cap - see calculateFare.
+  const liveSurge = await getSurgeMultiplier(cityId, body.pickup.lat, body.pickup.lng);
   const fare = await calculateFare({
     cityId,
     serviceType: body.serviceType,
     distanceM,
     durationSec,
+    normalDurationSec,
+    liveSurge,
     couponCode: body.couponCode,
     riderId,
     flags,
   });
-
-  // H3 surge snapshotted into quote (never re-read live at book/complete)
-  const surgeMult = await getSurgeMultiplier(cityId, body.pickup.lat, body.pickup.lng);
-  if (surgeMult !== 1) {
-    const baseTotal = fare.totalPaise - (fare.platformFeePaise ?? 0);
-    const surged = Math.round(baseTotal * surgeMult) + (fare.platformFeePaise ?? 0);
-    fare.surgeMultiplier = (fare.surgeMultiplier ?? 1) * surgeMult;
-    fare.totalPaise = surged;
-  }
-  void recordDemand(cityId, body.pickup.lat, body.pickup.lng);
+  void recordDemand(cityId, body.pickup.lat, body.pickup.lng, riderId);
 
   const quoteId = randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + matching.quoteTtlSec * 1000);
@@ -209,7 +206,7 @@ export async function estimate(riderId: string, body: {
 export async function book(
   app: FastifyInstance,
   riderId: string,
-  body: { quoteId: string; idempotencyKey: string; paymentMethod: 'cash' | 'upi' },
+  body: { quoteId: string; idempotencyKey: string; paymentMethod: 'cash' | 'upi'; payAt?: 'pickup' | 'drop' },
 ) {
   const existing = await Ride.findOne({ riderId, idempotencyKey: body.idempotencyKey });
   if (existing) return serializeRide(existing);
@@ -261,6 +258,9 @@ export async function book(
     fareTotalPaise: quote.fare?.totalPaise ?? 0,
     platformRevenuePaise: quote.fare?.platformFeePaise ?? 0,
     paymentMethod: body.paymentMethod,
+    // Parcels: sender pays at pickup (default) or receiver pays at drop.
+    payAt: quote.serviceType === 'parcel' ? (body.payAt ?? 'pickup') : null,
+    searchStartedAt: new Date(),
     startOtpHash: hashOtp(otp),
     startOtpHint: otp,
     searchExpiresAt: new Date(Date.now() + searchSec * 1000),
@@ -398,8 +398,14 @@ export async function accept(
     throw new AppError('RIDE_STATE_INVALID', 'Ride not open for accept', 409);
   }
 
+  // Only a pilot this ride was offered to (and who has not skipped / cancelled it) can take it.
+  const me = new Types.ObjectId(pilotId);
+  if (!(ride.offeredPilotIds ?? []).some((id) => String(id) === pilotId) ||
+      (ride.skippedPilotIds ?? []).some((id) => String(id) === pilotId)) {
+    throw new AppError('OFFER_NOT_FOR_YOU', 'This ride is no longer offered to you', 409);
+  }
   const updated = await Ride.findOneAndUpdate(
-    { _id: rideId, status: 'searching' },
+    { _id: rideId, status: 'searching', offeredPilotIds: me, skippedPilotIds: { $ne: me } },
     {
       $set: {
         status: 'pilot_assigned',
@@ -475,17 +481,23 @@ export async function start(
   pilotId: string,
   rideId: string,
   otp: string,
+  cashCollected?: boolean,
 ) {
   const ride = await Ride.findOne({ _id: rideId, pilotId });
   if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
   if (ride.startOtpHash !== hashOtp(otp)) {
     throw new AppError('OTP_INVALID', 'Invalid ride OTP', 400);
   }
+  // Parcel paid by the sender at pickup: the pilot must confirm the cash before starting.
+  const payNow = ride.payAt === 'pickup' && ride.paymentMethod === 'cash';
+  if (payNow && cashCollected !== true) {
+    throw new AppError('CASH_FIRST', 'Collect the parcel fare from the sender before starting', 400);
+  }
   const updated = await transition(
     rideId,
     'pilot_arrived',
     'in_progress',
-    { startOtpHint: null },
+    payNow ? { startOtpHint: null, paymentStatus: 'paid', cashCollectedAt: new Date() } : { startOtpHint: null },
     'pilot',
     pilotId,
   );
@@ -498,15 +510,29 @@ export async function complete(
   pilotId: string,
   rideId: string,
   collectedCash: boolean,
+  notCollectedReason?: 'receiver_refused' | 'rider_refused' | 'other',
 ) {
   const ride = await Ride.findOne({ _id: rideId, pilotId });
   if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
+  const alreadyPaid = ride.paymentStatus === 'paid'; // parcel paid at pickup
+  const paid = alreadyPaid || (collectedCash && ride.paymentMethod === 'cash');
+  const cashMissing = !paid && ride.paymentMethod === 'cash';
   const updated = await transition(
     rideId,
     'in_progress',
     'completed',
     {
-      paymentStatus: collectedCash && ride.paymentMethod === 'cash' ? 'paid' : 'unpaid',
+      paymentStatus: paid ? 'paid' : 'unpaid',
+      ...(paid && !alreadyPaid ? { cashCollectedAt: new Date() } : {}),
+      // Ops follow up with the sender / rider (admin -> Rides -> Payment not collected).
+      ...(cashMissing
+        ? {
+            paymentIssue: {
+              code: notCollectedReason ?? (ride.payAt === 'drop' ? 'receiver_refused' : 'other'),
+              at: new Date(),
+            },
+          }
+        : {}),
     },
     'pilot',
     pilotId,
@@ -654,7 +680,17 @@ export async function setPilotOnline(pilotId: string, online: boolean, loc?: { l
   if (online) {
     const { assertPilotCanGoOnline } = await import('../ledger/service.js');
     await assertPilotCanGoOnline(pilotId);
-    const pilot = await Pilot.findById(pilotId).select({ vehicleType: 1 }).lean();
+    const pilot = await Pilot.findById(pilotId).select({ vehicleType: 1, kycStatus: 1 }).lean();
+    // Only admin-approved pilots can take rides (dispatch ignores others anyway — say so clearly).
+    if (pilot?.kycStatus !== 'approved') {
+      throw new AppError(
+        'KYC_NOT_APPROVED',
+        pilot?.kycStatus === 'pending'
+          ? 'Your documents are under review. You can go online after Prila approves them.'
+          : 'Complete your documents to go online.',
+        403,
+      );
+    }
     await assertPilotInServiceArea(loc, pilot?.vehicleType);
   }
   const patch: Record<string, unknown> = { online, idle: online ? true : false };
@@ -736,6 +772,11 @@ export function serializeRide(
     commissionPaise: o.commissionPaise,
     paymentMethod: o.paymentMethod,
     paymentStatus: o.paymentStatus,
+    payAt: o.payAt ?? null,
+    paymentIssue: o.paymentIssue ?? null,
+    /** True when a pilot cancelled and we are finding another one. */
+    reassigned: (o.pilotCancellations?.length ?? 0) > 0,
+    pilotCancelCount: o.pilotCancellations?.length ?? 0,
     pickupEtaSec: o.pickupEtaSec,
     shakti: o.shakti,
     acceptDeadlineAt: o.acceptDeadlineAt,
@@ -783,4 +824,160 @@ function emitToPilot(app: FastifyInstance, pilotId: string, event: string, paylo
   } catch {
     /* socket optional in tests */
   }
+}
+
+/* ───────────────────────── pilot cancel → find another pilot ───────────────────────── */
+
+const PILOT_CANCELLABLE: RideStatus[] = ['pilot_assigned', 'pilot_arriving', 'pilot_arrived'];
+
+/**
+ * Pilot cancels after accepting (before the trip starts). The rider is NOT cancelled:
+ * the ride goes back to searching (this pilot excluded) and the rider sees
+ * "Your pilot cancelled, finding another pilot". No fee, no pilot penalty (counted only).
+ * Exception: parcel sender refused to pay at pickup → the request ends.
+ */
+export async function pilotCancel(
+  app: FastifyInstance,
+  pilotId: string,
+  rideId: string,
+  reasonCode: string,
+  reasonText?: string,
+) {
+  const ride = await Ride.findOne({ _id: rideId, pilotId });
+  if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
+  if (ride.status === 'in_progress') {
+    throw new AppError('RIDE_IN_PROGRESS', 'The trip has started. Call Prila support to cancel it.', 409);
+  }
+  if (!PILOT_CANCELLABLE.includes(ride.status as RideStatus)) {
+    throw new AppError('RIDE_STATE_INVALID', 'This ride can no longer be cancelled', 409);
+  }
+
+  if (reasonCode === 'sender_refused_payment') {
+    if (ride.payAt !== 'pickup') throw new AppError('VALIDATION_ERROR', 'Only for parcels paid at pickup', 400);
+    await Pilot.updateOne({ _id: pilotId }, { $inc: { cancelCount: 1 } });
+    const ended = await cancel(app, { id: pilotId, role: 'pilot' }, rideId, reasonCode, reasonText);
+    void notifyUser('rider', String(ride.riderId), 'Parcel cancelled', 'The pilot could not collect the parcel fare at pickup.', {
+      rideId,
+      deepLink: `prila://ride/${rideId}`,
+    });
+    return ended;
+  }
+
+  const dispatchCfg = await getDispatchConfig();
+  const matching = await getMatchingConfig();
+  const searchSec = dispatchCfg.enabled ? dispatchCfg.maxSearchSec : matching.maxSearchTimeSec;
+  const now = new Date();
+  const updated = await Ride.findOneAndUpdate(
+    { _id: rideId, pilotId, status: { $in: PILOT_CANCELLABLE } },
+    {
+      $set: {
+        status: 'searching',
+        pilotId: null,
+        acceptDeadlineAt: null,
+        lastPilotLocation: null,
+        lastPilotLocationAt: null,
+        pickupEtaSec: null,
+        searchStartedAt: now,
+        searchExpiresAt: new Date(now.getTime() + searchSec * 1000),
+      },
+      $addToSet: { skippedPilotIds: new Types.ObjectId(pilotId) },
+      $push: {
+        pilotCancellations: { pilotId: new Types.ObjectId(pilotId), at: now, reasonCode, reasonText },
+        timeline: { at: now, from: ride.status, to: 'searching', actor: 'pilot', actorId: pilotId, note: `pilot_cancel:${reasonCode}` },
+      },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!updated) throw new AppError('RIDE_STATE_INVALID', 'Ride changed. Refresh and try again.', 409);
+
+  await Pilot.updateOne({ _id: pilotId }, { $set: { idle: true }, $inc: { cancelCount: 1 } });
+  markPilotIdle(pilotId);
+  markDirty(pilotId);
+
+  emitToPilot(app, pilotId, 'ride:updated', { rideId });
+  emitToRider(app, String(updated.riderId), 'ride:pilot_cancelled', { rideId });
+  emitToRider(app, String(updated.riderId), 'ride:updated', { rideId });
+  void notifyUser('rider', String(updated.riderId), 'Finding another pilot', 'Your pilot cancelled. We are finding you another pilot.', {
+    rideId,
+    deepLink: `prila://ride/${rideId}`,
+  });
+
+  const flags = await getCustomerFlags();
+  const shaktiStrict = Boolean(updated.shakti && flags.prila_shakti && flags.prila_shakti_strict !== false);
+  if (dispatchCfg.enabled) {
+    await runBatchOffer(app, rideId, { shaktiStrict });
+  } else {
+    await offerBatchLegacy(app, rideId, shaktiStrict);
+  }
+  return { ok: true, rideId, status: 'searching' };
+}
+
+/* ───────────────────────── parcel: call the sender ───────────────────────── */
+
+/**
+ * Sender's phone for the assigned pilot of an active parcel (e.g. receiver refuses to pay).
+ * Only while the parcel is active; each lookup is counted. Real number (no masking yet).
+ */
+export async function senderContact(pilotId: string, rideId: string) {
+  const ride = await Ride.findOne({ _id: rideId, pilotId });
+  if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
+  if (ride.serviceType !== 'parcel') throw new AppError('FORBIDDEN', 'Only for parcels', 403);
+  if (!['pilot_arriving', 'pilot_arrived', 'in_progress'].includes(ride.status)) {
+    throw new AppError('RIDE_STATE_INVALID', 'Only during an active parcel delivery', 409);
+  }
+  const rider = await Rider.findById(ride.riderId).select('phone name').lean();
+  if (!rider?.phone) throw new AppError('NOT_FOUND', 'Sender number not available', 404);
+  await Ride.updateOne({ _id: rideId }, { $inc: { senderContactViews: 1 } });
+  return { name: rider.name ?? null, phone: rider.phone };
+}
+
+/* ───────────────────────── rider: who is coming ───────────────────────── */
+
+const PILOT_CARD_STATUSES = ['pilot_assigned', 'pilot_arriving', 'pilot_arrived', 'in_progress'];
+
+/** Pilot card for the rider: name, approved photo, vehicle, rating. Never the pilot's phone. */
+export async function pilotCardFor(ride: { status?: string | null; pilotId?: unknown }) {
+  if (!ride.pilotId || !PILOT_CARD_STATUSES.includes(ride.status ?? '')) return null;
+  const p = await Pilot.findById(ride.pilotId).select('name vehicleType vehicleNumber ratingAvg ratingCount photoKey').lean();
+  if (!p) return null;
+  const { signedGetUrl } = await import('../uploads/service.js');
+  return {
+    name: p.name ?? null,
+    vehicleType: p.vehicleType ?? null,
+    vehicleNumber: p.vehicleNumber ?? null,
+    rating: p.ratingAvg ? Math.round(p.ratingAvg * 10) / 10 : null,
+    ratingCount: p.ratingCount ?? 0,
+    photoUrl: p.photoKey ? await signedGetUrl(p.photoKey, 3600) : null,
+  };
+}
+
+/** Rider's view of a ride: the ride + the pilot card. */
+export async function riderRideView(rideId: string, riderId: string) {
+  const data = await getRide(rideId, { id: riderId, role: 'access' });
+  return { ...data, pilot: await pilotCardFor({ status: data.status, pilotId: data.pilotId }) };
+}
+
+/* ───────────────────────── admin: cash not collected ───────────────────────── */
+
+export async function listPaymentIssues(open: boolean, page: number, limit: number) {
+  const filter = open
+    ? { 'paymentIssue.code': { $exists: true }, 'paymentIssue.resolvedAt': null }
+    : { 'paymentIssue.resolvedAt': { $ne: null } };
+  return listRides(filter, page, limit);
+}
+
+export async function resolvePaymentIssue(actor: string, rideId: string, note: string) {
+  const updated = await Ride.findOneAndUpdate(
+    { _id: rideId, 'paymentIssue.code': { $exists: true }, 'paymentIssue.resolvedAt': null },
+    {
+      $set: {
+        'paymentIssue.resolvedAt': new Date(),
+        'paymentIssue.resolvedBy': actor,
+        'paymentIssue.resolutionNote': note,
+      },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!updated) throw new AppError('NOT_FOUND', 'No open payment issue on this ride', 404);
+  return serializeRide(updated);
 }

@@ -7,6 +7,7 @@ import { getMapsConfig, isMapsActive, type MapsConfig } from './config.js';
 import * as google from './google.js';
 import { allow } from './limiter.js';
 import { usage, type MapsOp } from './usage.js';
+import { searchLandmarks } from '../places/service.js';
 
 type LatLng = { lat: number; lng: number };
 type ServiceType = 'bike' | 'auto' | 'parcel' | 'logistics';
@@ -68,10 +69,23 @@ async function biasCentre(lat?: number, lng?: number): Promise<LatLng | null> {
   return centre;
 }
 
+export type SuggestionItem = {
+  source: 'landmark' | 'google';
+  placeId: string | null;
+  mainText: string;
+  secondaryText: string;
+  lat?: number;
+  lng?: number;
+};
+
+/**
+ * Ops landmarks first (free, our data), Google only when local hits are few.
+ * Landmarks still answer when Google is disabled, missing a key, or failing.
+ */
 export async function autocomplete(
   userId: string,
   input: { q: string; sessionToken: string; lat?: number; lng?: number },
-): Promise<{ suggestions: google.Suggestion[] }> {
+): Promise<{ suggestions: SuggestionItem[] }> {
   const cfg = await getMapsConfig();
   const q = input.q.trim();
   // Below min chars: answer locally, no Google call, no rate-limit charge.
@@ -79,12 +93,35 @@ export async function autocomplete(
     usage.skip('belowMinChars');
     return { suggestions: [] };
   }
-  if (!(await isMapsActive(cfg))) throw unavailable();
-  rateLimit('autocomplete', userId, cfg.autocompleteRateLimitPerMin);
+
+  const local: SuggestionItem[] = (await searchLandmarks(q, 5)).map((l) => ({
+    source: 'landmark',
+    placeId: null,
+    mainText: l.name,
+    secondaryText: l.address,
+    lat: l.lat,
+    lng: l.lng,
+  }));
+  if (local.length > 0 && local.length >= cfg.localMinHitsToSkipGoogle) {
+    usage.skip('localHits');
+    return { suggestions: local };
+  }
+
+  if (!(await isMapsActive(cfg))) {
+    if (local.length) return { suggestions: local };
+    throw unavailable();
+  }
+  try {
+    rateLimit('autocomplete', userId, cfg.autocompleteRateLimitPerMin);
+  } catch (err) {
+    if (local.length) return { suggestions: local };
+    throw err;
+  }
 
   const bias = await biasCentre(input.lat, input.lng);
+  let googleItems: google.Suggestion[];
   try {
-    const suggestions = await google.autocomplete({
+    googleItems = await google.autocomplete({
       q,
       sessionToken: input.sessionToken,
       bias: bias ?? { lat: 20.5937, lng: 78.9629 }, // India centroid if no city configured yet
@@ -93,10 +130,16 @@ export async function autocomplete(
       regionCode: cfg.regionCode,
       timeoutMs: cfg.timeoutMs,
     });
-    return { suggestions };
   } catch (err) {
-    throw wrapGoogle('autocomplete', err);
+    const wrapped = wrapGoogle('autocomplete', err); // logs status only
+    if (local.length) return { suggestions: local };
+    throw wrapped;
   }
+  const localNames = new Set(local.map((l) => l.mainText.trim().toLowerCase()));
+  const remote: SuggestionItem[] = googleItems
+    .filter((g) => !localNames.has(g.mainText.trim().toLowerCase()))
+    .map((g) => ({ source: 'google', placeId: g.placeId, mainText: g.mainText, secondaryText: g.secondaryText }));
+  return { suggestions: [...local, ...remote] };
 }
 
 export async function place(
@@ -155,6 +198,8 @@ export async function reverse(
 export type EstimateRoute = {
   distanceM: number;
   durationSec: number;
+  /** Trip time without traffic. Equals durationSec unless live traffic is on (maps.routeTrafficAware). */
+  normalDurationSec: number;
   /** Google encoded polyline; null when the route is a straight-line fallback. */
   polyline: string | null;
   source: 'google' | 'haversine';
@@ -170,7 +215,8 @@ export async function routeForEstimate(pickup: LatLng, drop: LatLng, serviceType
   const fallback = (): EstimateRoute => {
     usage.skip('routeFallback');
     const distanceM = Math.round(haversineM(pickup, drop) * cfg.routeFallbackRoadFactor);
-    return { distanceM, durationSec: estimateDurationSec(distanceM), polyline: null, source: 'haversine' };
+    const durationSec = estimateDurationSec(distanceM);
+    return { distanceM, durationSec, normalDurationSec: durationSec, polyline: null, source: 'haversine' };
   };
   if (!(await isMapsActive(cfg))) return fallback();
 
@@ -198,9 +244,12 @@ export async function routeForEstimate(pickup: LatLng, drop: LatLng, serviceType
       log().warn({ op: 'computeRoutes', googleStatus: 'NO_ROUTE', travelMode }, 'no route; using fallback');
       return fallback();
     }
+    const durationSec = Math.max(60, r.durationSec);
     const route: EstimateRoute = {
       distanceM: r.distanceM,
-      durationSec: Math.max(60, r.durationSec),
+      durationSec,
+      // Traffic can only add time to the normal trip, never make it cheaper than normal.
+      normalDurationSec: r.staticDurationSec != null ? Math.min(durationSec, Math.max(60, r.staticDurationSec)) : durationSec,
       polyline: r.polyline,
       source: 'google',
     };

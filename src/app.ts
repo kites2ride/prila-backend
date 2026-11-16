@@ -22,6 +22,8 @@ import { shareRoutes } from './modules/share/routes.js';
 import { nudgeRoutes } from './modules/nudges/routes.js';
 import { mapsRoutes } from './modules/maps/routes.js';
 import { zoneRoutes } from './modules/zones/routes.js';
+import { placesRoutes } from './modules/places/routes.js';
+import { kycRoutes } from './modules/kyc/routes.js';
 import { initFcm } from './modules/push/service.js';
 import { registerJwt } from './plugins/auth.js';
 
@@ -110,6 +112,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
       await api.register(nudgeRoutes);
       await api.register(mapsRoutes);
       await api.register(zoneRoutes);
+      await api.register(placesRoutes);
+      await api.register(kycRoutes);
     },
     { prefix: '/api/v1' },
   );

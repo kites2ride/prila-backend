@@ -38,6 +38,8 @@ const citySchema = new Schema(
       coordinates: { type: [Number], required: true }, // [lng, lat]
     },
     services: [{ type: String }],
+    /** Night / rush-hour times and the overall price cap (rides/pricing.ts → cityPricingSchema). */
+    pricing: { type: Schema.Types.Mixed },
   },
   { timestamps: true },
 );

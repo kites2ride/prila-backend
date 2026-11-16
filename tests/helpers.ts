@@ -100,6 +100,8 @@ export function setupTestApp() {
     usage.reset();
     const { locationStore } = await import('../src/modules/dispatch/locationStore.js');
     locationStore.clear();
+    const { _resetSurgeForTests } = await import('../src/modules/dispatch/surge.js');
+    _resetSurgeForTests();
     const { Ride, RideQuote } = await import('../src/modules/rides/model.js');
     const { LedgerEntry, PilotWallet, PayoutRequest } = await import('../src/modules/ledger/model.js');
     await Promise.all([
@@ -126,9 +128,11 @@ export function setupTestApp() {
         const { NudgeRule } = await import('../src/modules/nudges/model.js');
         const { Zone } = await import('../src/modules/app/model.js');
         const { OutOfAreaDemand } = await import('../src/modules/zones/model.js');
+        const { Landmark } = await import('../src/modules/places/model.js');
         await Promise.all([
           Zone.deleteMany({}),
           OutOfAreaDemand.deleteMany({}),
+          Landmark.deleteMany({}),
           AnalyticsEvent.deleteMany({}),
           Report.deleteMany({}),
           SosAlert.deleteMany({}),

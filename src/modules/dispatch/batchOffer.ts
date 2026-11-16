@@ -25,7 +25,8 @@ export async function runBatchOffer(
   const cfg = await getDispatchConfig();
   const searchExpired =
     (ride.searchExpiresAt && ride.searchExpiresAt.getTime() < Date.now()) ||
-    (ride.createdAt && Date.now() - new Date(ride.createdAt).getTime() > cfg.maxSearchSec * 1000);
+    // Measured from the current search (a pilot cancelling restarts the clock).
+    Date.now() - new Date(ride.searchStartedAt ?? ride.createdAt ?? Date.now()).getTime() > cfg.maxSearchSec * 1000;
 
   if (searchExpired) {
     await markNoPilot(rideId);
