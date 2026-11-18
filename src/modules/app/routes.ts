@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { ok } from '../../lib/envelope.js';
 import { authenticateAdmin } from '../../plugins/auth.js';
 import { bootstrapQuerySchema, configKeySchema, patchConfigSchema } from './schemas.js';
+import { appConfigMeta } from './configMeta.js';
+import { typedConfigMeta } from './settingsCatalog.js';
 import * as appService from './service.js';
 
 export async function appRoutes(app: FastifyInstance) {
@@ -16,6 +18,30 @@ export async function appRoutes(app: FastifyInstance) {
     const data = await appService.getUpdatePolicy(query.app, query.platform, query.build);
     return reply.send(ok(data));
   });
+
+  app.get(
+    '/admin/config/:key/meta',
+    { preHandler: authenticateAdmin },
+    async (req, reply) => {
+      const key = configKeySchema.parse((req.params as { key: string }).key);
+      if (key !== 'app_config_customer' && key !== 'app_config_pilot') {
+        if (
+        key === 'dispatch' ||
+        key === 'surge' ||
+        key === 'maps' ||
+        key === 'pilot_quality' ||
+        key === 'support' ||
+        key === 'maintenance' ||
+        key === 'zones' ||
+        key === 'app_update'
+      ) {
+        return reply.send(ok(typedConfigMeta(key)));
+      }
+      return reply.send(ok({}));
+      }
+      return reply.send(ok(appConfigMeta(key)));
+    },
+  );
 
   app.get(
     '/admin/config/:key',

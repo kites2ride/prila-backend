@@ -55,6 +55,7 @@ export async function patchConfig(actor: string, key: ConfigKey, rawValue: unkno
 
   configCache.invalidate(`cfg:${key}`);
   configCache.invalidatePrefix('bootstrap:');
+  configCache.invalidatePrefix('update:');
 
   await AdminAuditLog.create({
     actor,
@@ -118,6 +119,27 @@ async function resolveCity(lat?: number, lng?: number) {
       },
     },
   }).lean();
+}
+
+type PromoSlot = {
+  enabled?: boolean;
+  audience?: string;
+  cityIds?: string[];
+  startsAt?: string;
+  endsAt?: string;
+  [k: string]: unknown;
+};
+
+/** Server-side gate: schedule window + city audience. Apps get `{ enabled: false }` when not live. */
+function activePromo(raw: unknown, cityId: string | undefined, now = Date.now()) {
+  const off = { enabled: false };
+  const slot = raw as PromoSlot | undefined;
+  if (!slot || slot.enabled !== true) return off;
+  if (slot.startsAt && now < Date.parse(slot.startsAt)) return off;
+  if (slot.endsAt && now >= Date.parse(slot.endsAt)) return off;
+  if (slot.audience === 'city' && !(cityId && slot.cityIds?.includes(cityId))) return off;
+  const { startsAt: _s, endsAt: _e, cityIds: _c, ...publicFields } = slot;
+  return publicFields;
 }
 
 export async function bootstrap(query: BootstrapQuery) {
@@ -209,7 +231,7 @@ export async function bootstrap(query: BootstrapQuery) {
       query.app === 'pilot'
         ? ((appValue.kycDocumentsByVehicle as Record<string, unknown>) ?? {})
         : undefined,
-    promo: (promoValue as Record<string, unknown>)[query.app] ?? { enabled: false },
+    promo: activePromo(promoValue[query.app], city ? String(city._id) : undefined),
     location:
       query.app === 'pilot'
         ? {
