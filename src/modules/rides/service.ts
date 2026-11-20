@@ -724,6 +724,8 @@ export async function updatePilotLocation(
   const result = await ingestPilotLocation(pilotId, loc);
   if (result.ok) {
     markDirty(pilotId);
+  } else {
+    app.log.warn({ pilotId, reason: result.reason }, 'pilot location ping rejected');
   }
 
   const ride = await Ride.findOne({
@@ -747,7 +749,13 @@ export async function updatePilotLocation(
       at: new Date().toISOString(),
     });
   }
-  return { ok: result.ok, reason: result.ok ? undefined : result.reason };
+  return {
+    ok: result.ok,
+    reason: result.ok ? undefined : result.reason,
+    // Pilot is online but outside every service zone: the app shows this and they get no rides here.
+    outsideServiceArea: result.ok ? Boolean(result.state.outsideAreaMessage) : undefined,
+    message: result.ok ? (result.state.outsideAreaMessage ?? null) : null,
+  };
 }
 
 export function serializeRide(
