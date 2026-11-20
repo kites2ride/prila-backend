@@ -4,6 +4,7 @@ import { AdminAuditLog, City, ConfigSingleton, FareRule, Zone } from '../src/mod
 import { Pilot, Rider } from '../src/modules/auth/model.js';
 import { checkPolygon } from '../src/modules/zones/geo.js';
 import { OutOfAreaDemand } from '../src/modules/zones/model.js';
+import { locationStore } from '../src/modules/dispatch/locationStore.js';
 import { invalidateZoneCaches } from '../src/modules/zones/service.js';
 import { configCache } from '../src/lib/cache.js';
 import { app, setupTestApp } from './helpers.js';
@@ -425,5 +426,45 @@ describe('zones: admin', () => {
     });
     expect(res.json().data.items[0]).toMatchObject({ kind: 'pickup', count: 2, reasons: ['pickup_outside'] });
     expect(res.json().data.items[0].lat).toBeCloseTo(OUTSIDE.lat, 1);
+  });
+
+  describe('pilot city follows the pilot', () => {
+    function ping(token: string, at: LatLng, minutesLater: number) {
+      return app.inject({
+        method: 'POST', url: '/api/v1/pilot/location', headers: { authorization: `Bearer ${token}` },
+        payload: { ...at, recordedAt: Date.now() + minutesLater * 60_000 },
+      });
+    }
+
+    it('assigns the city from location, follows the pilot to another city, and warns outside every zone', async () => {
+      await standardZones();
+      const karim = (await City.findOne({ slug: 'karimnagar' }))!;
+      const wgl = await warangalCity();
+      const p = await pilotToken('bike');
+      expect((await goOnline(p.token, H_IN)).statusCode).toBe(200);
+
+      // Pilot had no city set by hand: it is derived from where they are.
+      expect(String((await Pilot.findById(p.id).lean())?.cityId)).toBe(String(wgl._id));
+      expect(locationStore.get(p.id)?.cityId).toBe(String(wgl._id));
+
+      // Drives to another city: city follows, no warning.
+      const moved = await ping(p.token, KARIM_IN, 60);
+      expect(moved.json().data).toMatchObject({ ok: true, outsideServiceArea: false, message: null });
+      expect(String((await Pilot.findById(p.id).lean())?.cityId)).toBe(String(karim._id));
+      expect(locationStore.get(p.id)?.cityId).toBe(String(karim._id));
+
+      // Leaves every zone: told so, and not counted in any city.
+      const out = await ping(p.token, OUTSIDE, 120);
+      expect(out.json().data.ok).toBe(true);
+      expect(out.json().data.outsideServiceArea).toBe(true);
+      expect(out.json().data.message).toContain('outside');
+      expect(locationStore.get(p.id)?.cityId).toBeUndefined();
+
+      // Same-spot pings keep the warning without re-resolving; coming back clears it.
+      expect((await ping(p.token, OUTSIDE, 121)).json().data.outsideServiceArea).toBe(true);
+      const back = await ping(p.token, H_IN, 180);
+      expect(back.json().data).toMatchObject({ outsideServiceArea: false, message: null });
+      expect(locationStore.get(p.id)?.cityId).toBe(String(wgl._id));
+    });
   });
 });

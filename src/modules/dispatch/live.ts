@@ -36,7 +36,13 @@ export async function liveSnapshot(cityId: string, now = Date.now()) {
   const staleAfterSec = cfg.locationTtlSec;
   const staleMs = staleAfterSec * 1000;
 
-  const live = locationStore.listAll().filter((p) => p.online && p.cityId === cityId);
+  const all = locationStore.listAll();
+  // TEMP DEBUG: remove once the live-map city mismatch is diagnosed.
+  console.warn(
+    '[live-debug]',
+    JSON.stringify({ requestedCityId: cityId, inStore: all.map((p) => ({ id: p.pilotId, online: p.online, cityId: p.cityId ?? null })) }),
+  );
+  const live = all.filter((p) => p.online && p.cityId === cityId);
   const rides = await Ride.find({ cityId: new Types.ObjectId(cityId), status: { $in: LIVE_RIDE_STATUSES } })
     .select('status serviceType pickup drop pilotId createdAt lastPilotLocationAt')
     .sort({ createdAt: -1 })

@@ -58,6 +58,7 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await app.register(cors, {
     origin: e.CORS_ORIGINS,
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   await app.register(rateLimit, {
     global: true,

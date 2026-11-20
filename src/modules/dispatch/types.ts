@@ -15,6 +15,8 @@ export type PilotLiveState = {
   serviceTypes: string[];
   vehicleType?: string;
   cityId?: string;
+  /** Set while the pilot is outside every service zone (shown to them in the app). */
+  outsideAreaMessage?: string;
   gender?: string;
   shaktiOptIn?: boolean;
   kycStatus?: string;

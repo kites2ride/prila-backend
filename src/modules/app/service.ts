@@ -91,7 +91,7 @@ export async function getUpdatePolicy(app: 'customer' | 'pilot', platform: 'andr
   };
 }
 
-async function resolveCity(lat?: number, lng?: number) {
+export async function resolveCity(lat?: number, lng?: number) {
   if (lat === undefined || lng === undefined) {
     const first = await City.findOne({ enabled: true }).lean();
     return first;
