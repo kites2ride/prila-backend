@@ -13,6 +13,7 @@ import {
 } from '../app/model.js';
 import { Pilot, Rider } from '../auth/model.js';
 import { Ride } from '../rides/model.js';
+import { getLiveOnlinePilotIds } from '../dispatch/liveOnline.js';
 import { istDayBounds } from './ist.js';
 import { checkPolygon } from '../zones/geo.js';
 import { getZonesConfig, invalidateZoneCaches, zonesConfigured } from '../zones/service.js';
@@ -65,7 +66,7 @@ export async function getOverview(fromYmd: string, toYmd: string) {
       { $match: { ...created, status: { $in: ['completed', 'paid'] } } },
       { $group: { _id: null, total: { $sum: '$platformRevenuePaise' } } },
     ]),
-    Pilot.countDocuments({ online: true, status: 'active' }),
+    getLiveOnlinePilotIds().then((ids) => ids.size),
     Ride.aggregate<{ avg: number }>([
       {
         $match: {

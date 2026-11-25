@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { getLiveOnlinePilotIds } from '../dispatch/liveOnline.js';
 import { AppError } from '../../lib/errors.js';
 import { ConfigSingleton } from '../app/model.js';
 import { Pilot } from '../auth/model.js';
@@ -542,6 +543,7 @@ export async function listPilots(status: string | undefined, page: number, limit
       .lean(),
     Pilot.countDocuments(filter as never),
   ]);
+  const liveOnline = await getLiveOnlinePilotIds();
   const ids = items.map((p) => p._id);
   const wallets = await PilotWallet.find({ pilotId: { $in: ids } }).lean();
   const walletByPilot = new Map(wallets.map((w) => [String(w.pilotId), w]));
@@ -555,7 +557,7 @@ export async function listPilots(status: string | undefined, page: number, limit
         vehicleType: p.vehicleType,
         vehicleNumber: p.vehicleNumber,
         kycStatus: p.kycStatus,
-        online: p.online,
+        online: liveOnline.has(String(p._id)),
         status: p.status,
         suspendReason: p.suspendReason,
         ratingAvg: p.ratingAvg,
