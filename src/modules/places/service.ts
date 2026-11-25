@@ -11,9 +11,6 @@ type PointDoc = { coordinates?: number[] } | null | undefined;
 const RECENT_RIDES = 30;
 const RECENT_MAX = 6;
 
-const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
-const key = (lat: number, lng: number) => `${r4(lat)},${r4(lng)}`;
-
 export function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -37,35 +34,47 @@ function serializeSaved(saved: Array<{ label?: string; name?: string; address?: 
   return out.sort((a, b) => (a.label === b.label ? 0 : a.label === 'home' ? -1 : 1));
 }
 
+/** Names the app used to send when it had no real address. Never a useful recent. */
+const PLACEHOLDER_NAMES = new Set(['', 'current location', 'pinned location']);
+const SAME_PLACE_M = 50;
+
+export const isRealPlaceName = (name: string | null | undefined) => !PLACEHOLDER_NAMES.has((name ?? '').trim().toLowerCase());
+
+function metersBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad;
+  const dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Most-recently-used destinations: drops only, newest ride first, max 6. Skips 0/0 coordinates;
+ * drops within 50 m of a newer one are collapsed (the newest stays on top). Placeholder or empty
+ * names are returned as-is so the app can label them (demo fallback until reverse-geocoding is
+ * enabled); a real title repeated at another spot also keeps only its newest entry.
+ */
 export async function myPlaces(riderId: string) {
   const [rider, rides] = await Promise.all([
     Rider.findById(riderId).select({ savedPlaces: 1 }).lean(),
     Ride.find({ riderId: new Types.ObjectId(riderId) })
       .sort({ createdAt: -1 })
       .limit(RECENT_RIDES)
-      .select({ pickup: 1, drop: 1, createdAt: 1 })
+      .select({ drop: 1, createdAt: 1 })
       .lean(),
   ]);
   const saved = serializeSaved((rider?.savedPlaces ?? []) as never);
-  const seen = new Set(saved.map((s) => key(s.lat, s.lng)));
   const recents: Array<{ name: string; address: string; lat: number; lng: number; lastUsedAt: Date | null }> = [];
   for (const ride of rides) {
-    // drop first: the destination is the more likely next search
-    for (const p of [ride.drop, ride.pickup] as Array<{ name?: string; address?: string; location?: PointDoc } | undefined>) {
-      if (recents.length >= RECENT_MAX) break;
-      const ll = latLngOf(p?.location);
-      if (!ll) continue;
-      const k = key(ll.lat, ll.lng);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      recents.push({
-        name: p?.name?.trim() || p?.address?.trim() || '',
-        address: p?.address ?? '',
-        ...ll,
-        lastUsedAt: (ride as { createdAt?: Date }).createdAt ?? null,
-      });
-    }
     if (recents.length >= RECENT_MAX) break;
+    const p = ride.drop as { name?: string; address?: string; location?: PointDoc } | undefined;
+    const ll = latLngOf(p?.location);
+    if (!ll || ll.lat === 0 || ll.lng === 0) continue;
+    const name = p?.name?.trim() ?? '';
+    const title = name.toLowerCase();
+    const sameTitle = (r: { name: string }) => isRealPlaceName(name) && r.name.toLowerCase() === title;
+    if (recents.some((r) => sameTitle(r) || metersBetween(r, ll) <= SAME_PLACE_M)) continue;
+    recents.push({ name, address: p?.address ?? '', ...ll, lastUsedAt: (ride as { createdAt?: Date }).createdAt ?? null });
   }
   return { saved, recents };
 }

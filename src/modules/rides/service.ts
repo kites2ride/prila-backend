@@ -7,7 +7,8 @@ import { City } from '../app/model.js';
 import { Pilot, Rider } from '../auth/model.js';
 import { CouponRedemption } from '../coupons/model.js';
 import { calculateFare } from './fare.js';
-import { routeForEstimate } from '../maps/service.js';
+import { reverse as reverseGeocode, routeForEstimate } from '../maps/service.js';
+import { isRealPlaceName } from '../places/service.js';
 import { assertPilotInServiceArea, assertTripInServiceArea } from '../zones/service.js';
 import {
   getDispatchConfig,
@@ -102,6 +103,26 @@ async function transition(
   return updated;
 }
 
+type TripPoint = { lat: number; lng: number; name?: string; address?: string };
+
+/**
+ * The drop must carry a real place name (it feeds the rider's recents). When the app sent none or a
+ * placeholder, reverse-geocode the exact coordinates; if Google has nothing, the name stays empty
+ * (never "Pinned location") and the place simply won't show up in recents.
+ */
+async function withRealPlace(riderId: string, p: TripPoint): Promise<TripPoint> {
+  if (isRealPlaceName(p.name)) return p;
+  let address = p.address?.trim() || null;
+  if (!address) {
+    try {
+      address = (await reverseGeocode(riderId, { lat: p.lat, lng: p.lng })).address;
+    } catch {
+      address = null; // maps down / rate limited: booking must still work
+    }
+  }
+  return { ...p, name: address ? (address.split(',')[0]?.trim() ?? '') : '', address: address ?? '' };
+}
+
 export async function estimate(riderId: string, body: {
   serviceType: string;
   pickup: { lat: number; lng: number; name?: string; address?: string };
@@ -119,6 +140,7 @@ export async function estimate(riderId: string, body: {
     { lat: body.drop.lat, lng: body.drop.lng },
     body.serviceType,
   );
+  body = { ...body, drop: (await withRealPlace(riderId, body.drop)) as typeof body.drop };
   let cityId = zoneCityId ?? body.cityId;
   if (!cityId) {
     const city = await City.findOne({ enabled: true }).lean();
@@ -959,10 +981,45 @@ export async function pilotCardFor(ride: { status?: string | null; pilotId?: unk
   };
 }
 
-/** Rider's view of a ride: the ride + the pilot card. */
+const FINISHED_WITH_PILOT = ['completed', 'paid'];
+
+/**
+ * Finished trips show who drove in the rider's history. Only the first name-level detail is shared:
+ * no photo, plate, rating or phone (the full card is for rides in progress).
+ */
+export async function pilotNamesFor(rides: { status?: string | null; pilotId?: unknown }[]) {
+  const ids = [
+    ...new Set(
+      rides.filter((r) => r.pilotId && FINISHED_WITH_PILOT.includes(r.status ?? '')).map((r) => String(r.pilotId)),
+    ),
+  ];
+  const names = new Map<string, string>();
+  if (ids.length === 0) return names;
+  const pilots = await Pilot.find({ _id: { $in: ids } }).select('name').lean();
+  for (const p of pilots) if (p.name) names.set(String(p._id), p.name);
+  return names;
+}
+
+/** Rider's view of a ride: the ride + the pilot card (name only once the trip is finished). */
 export async function riderRideView(rideId: string, riderId: string) {
   const data = await getRide(rideId, { id: riderId, role: 'access' });
-  return { ...data, pilot: await pilotCardFor({ status: data.status, pilotId: data.pilotId }) };
+  const card = await pilotCardFor({ status: data.status, pilotId: data.pilotId });
+  if (card) return { ...data, pilot: card };
+  const name = (await pilotNamesFor([data])).get(String(data.pilotId));
+  return { ...data, pilot: name ? { name } : null };
+}
+
+/** Rider's ride history with the driver's name on finished trips. */
+export async function riderRideHistory(riderId: string, page: number, limit: number) {
+  const data = await listRides({ riderId }, page, limit);
+  const names = await pilotNamesFor(data.items);
+  return {
+    ...data,
+    items: data.items.map((r) => {
+      const name = r.pilotId ? names.get(String(r.pilotId)) : undefined;
+      return name ? { ...r, pilot: { name } } : r;
+    }),
+  };
 }
 
 /* ───────────────────────── admin: cash not collected ───────────────────────── */

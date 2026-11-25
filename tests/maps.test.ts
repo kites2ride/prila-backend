@@ -237,7 +237,7 @@ describe('maps: reverse geocode', () => {
 
 describe('maps: route inside /rides/estimate', () => {
   const pickup = { lat: 17.9689, lng: 79.5941 };
-  const drop = { lat: 18.0072, lng: 79.5584 };
+  const drop = { lat: 18.0072, lng: 79.5584, name: 'Nayeem Nagar' };
 
   async function fareRule(serviceType: 'bike' | 'auto') {
     const city = await City.findOne();
@@ -306,6 +306,31 @@ describe('maps: route inside /rides/estimate', () => {
     const fare = res.json().data.fare;
     expect(fare).toMatchObject({ timePaise: 3300, trafficExtraSec: 720, reasons: ['traffic'] });
     expect(fare.totalPaise - fare.normalFarePaise).toBe(1200 + 500); // +₹12 traffic, + platform fee
+  });
+
+  it('placeholder drop name is replaced by the reverse-geocoded place and saved on the ride', async () => {
+    await fareRule('bike');
+    google((url) =>
+      url.pathname.includes('geocode')
+        ? { json: { status: 'OK', results: [{ formatted_address: 'Nayeem Nagar, Hanamkonda', types: ['sublocality'] }] } }
+        : { json: { routes: [{ distanceMeters: 6800, duration: '1260s', polyline: { encodedPolyline: 'p' } }] } },
+    );
+    const t = await riderToken();
+    const quote = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rides/estimate',
+      headers: { authorization: `Bearer ${t}` },
+      payload: { serviceType: 'bike', pickup, drop: { ...drop, name: 'Pinned location' } },
+    });
+    expect(quote.statusCode).toBe(200);
+    const book = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rides',
+      headers: { authorization: `Bearer ${t}` },
+      payload: { quoteId: quote.json().data.quoteId, idempotencyKey: 'maps-test-place-1' },
+    });
+    const ride = await Ride.findById(book.json().data.id).lean();
+    expect(ride?.drop).toMatchObject({ name: 'Nayeem Nagar', address: 'Nayeem Nagar, Hanamkonda' });
   });
 
   it('falls back to straight-line distance when Google fails (estimate still works)', async () => {

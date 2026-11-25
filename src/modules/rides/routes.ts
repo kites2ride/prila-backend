@@ -66,7 +66,7 @@ export async function rideRoutes(app: FastifyInstance) {
 
   app.get('/rides', { preHandler: authenticateRider }, async (req, reply) => {
     const q = pageSchema.parse(req.query);
-    const data = await rideService.listRides({ riderId: req.user.sub }, q.page, q.limit);
+    const data = await rideService.riderRideHistory(req.user.sub, q.page, q.limit);
     return reply.send(ok(data));
   });
 

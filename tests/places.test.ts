@@ -110,7 +110,7 @@ describe('places: saved + recents', () => {
     expect((await req('GET', '/places/mine', 'bad')).statusCode).toBe(401);
   });
 
-  it('recents: newest first, deduped, max 6, excludes saved places', async () => {
+  it('recents: drops only, newest first, deduped, max 6, saved places not excluded', async () => {
     const r = await rider();
     await req('PUT', '/places/saved/home', r.token, { name: 'Home', lat: 18.0, lng: 79.56 });
     const t0 = Date.now();
@@ -125,19 +125,38 @@ describe('places: saved + recents', () => {
 
     const res = await req('GET', '/places/mine', r.token);
     const names = res.json().data.recents.map((p: { name: string }) => p.name);
-    expect(names).toEqual(['F', 'E', 'D', 'C', 'B', 'A']);
-    expect(names).not.toContain('Home');
+    expect(names).toEqual(['F', 'D', 'B', 'College', 'Bus Stand']);
+    expect(names).not.toContain('E'); // pickups are not recents
     expect(res.json().data.recents[0]).toMatchObject({ address: 'F addr', lat: 17.95, lng: 79.55 });
     expect(res.json().data.saved[0].label).toBe('home');
   });
 
-  it('recents dedupe repeated places across rides', async () => {
+  it('recents: a repeated destination moves back to the top once (real title or within 50 m)', async () => {
     const r = await rider();
     const t0 = Date.now();
-    await addRide(r.id, new Date(t0 - 2000), ['Bus Stand', 17.97, 79.6], ['College', 18.02, 79.53]);
-    await addRide(r.id, new Date(t0 - 1000), ['College', 18.02, 79.53], ['Bus Stand', 17.97, 79.6]);
+    await addRide(r.id, new Date(t0 - 4000), ['x', 1, 1], ['Bus Stand', 17.97, 79.6]);
+    await addRide(r.id, new Date(t0 - 3000), ['x', 1, 1], ['College', 18.02, 79.53]);
+    await addRide(r.id, new Date(t0 - 2000), ['x', 1, 1], ['bus stand', 17.5, 79.1]); // same title, different case
+    await addRide(r.id, new Date(t0 - 1000), ['x', 1, 1], ['Cafe', 18.02005, 79.53005]); // ~7 m from College
+    const recents = (await req('GET', '/places/mine', r.token)).json().data.recents;
+    expect(recents.map((p: { name: string }) => p.name)).toEqual(['Cafe', 'bus stand']);
+  });
+
+  it('recents: placeholder-named trips are kept (distinct spots), 0/0 and same-spot repeats are not', async () => {
+    const r = await rider();
+    const t0 = Date.now();
+    await addRide(r.id, new Date(t0 - 5000), ['x', 1, 1], ['Real Place', 17.97, 79.6]);
+    await addRide(r.id, new Date(t0 - 4000), ['x', 1, 1], ['Pinned location', 17.1, 79.1]);
+    await addRide(r.id, new Date(t0 - 3000), ['x', 1, 1], ['Pinned location', 17.2, 79.2]); // same title, other spot: kept
+    await addRide(r.id, new Date(t0 - 2000), ['x', 1, 1], ['Current location', 17.2, 79.20002]); // ~2 m from previous
+    await addRide(r.id, new Date(t0 - 1000), ['x', 1, 1], ['Null Island', 0, 0]);
     const names = (await req('GET', '/places/mine', r.token)).json().data.recents.map((p: { name: string }) => p.name);
-    expect(names).toEqual(['Bus Stand', 'College']);
+    expect(names).toEqual(['Current location', 'Pinned location', 'Real Place']);
+  });
+
+  it('brand-new rider: no recents at all', async () => {
+    const r = await rider();
+    expect((await req('GET', '/places/mine', r.token)).json().data.recents).toEqual([]);
   });
 });
 
