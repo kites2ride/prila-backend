@@ -56,6 +56,8 @@ const fareBreakdownSchema = new Schema(
     platformFeePaise: Number,
     cancellationFeePaise: Number,
     discountPaise: { type: Number, default: 0 },
+    /** Extra the rider added to attract a pilot. Already included in totalPaise. */
+    boostPaise: { type: Number, default: 0 },
     couponCode: String,
     totalPaise: Number,
     configVersion: Number,
@@ -92,6 +94,8 @@ const rideSchema = new Schema(
     routeSource: { type: String, enum: ['google', 'haversine'], default: 'haversine' },
     fare: fareBreakdownSchema,
     fareTotalPaise: { type: Number, default: 0 },
+    /** Rider's fare boost (paise), included in fareTotalPaise. Goes 100% to the pilot. */
+    boostPaise: { type: Number, default: 0 },
     platformRevenuePaise: { type: Number, default: 0 },
     pilotNetPaise: { type: Number },
     commissionPaise: { type: Number },
@@ -145,6 +149,8 @@ const rideSchema = new Schema(
     idempotencyKey: { type: String, index: true },
     cancelReasonCode: { type: String },
     cancelReasonText: { type: String },
+    /** Fee charged to the rider for cancelling (paise). 0 = free. */
+    cancellationFeePaise: { type: Number, default: 0 },
     riderRating: { type: Number, min: 1, max: 5 },
     pilotRating: { type: Number, min: 1, max: 5 },
     riderRatingTags: [String],
@@ -174,6 +180,8 @@ rideSchema.index({ 'pickup.location': '2dsphere' });
 rideSchema.index({ 'paymentIssue.code': 1, 'paymentIssue.resolvedAt': 1 }, { sparse: true });
 rideSchema.index({ status: 1, updatedAt: -1 });
 rideSchema.index({ riderId: 1, status: 1 });
+/** A rider's newest rides first: recent places, trip history. Without it Mongo loads and sorts ALL of a rider's rides. */
+rideSchema.index({ riderId: 1, createdAt: -1 });
 rideSchema.index({ pilotId: 1, status: 1 });
 
 const quoteSchema = new Schema(

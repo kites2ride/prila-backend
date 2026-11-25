@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RIDER_CANCEL_REASONS } from './cancelPolicy.js';
 
 const latLng = z.object({
   lat: z.number().min(-90).max(90),
@@ -54,6 +55,15 @@ export const cancelSchema = z.object({
   idempotencyKey: z.string().min(8).max(64).optional(),
 });
 
+/** Rider cancel (POST /rides/:id/cancel). Admin cancel keeps the looser cancelSchema. */
+export const riderCancelSchema = z.object({
+  reasonCode: z.enum(RIDER_CANCEL_REASONS),
+  reasonText: z.string().trim().max(200).optional(),
+  /** "Find another Captain": cancel this pilot and search again (only for pilot-fault reasons). */
+  rematch: z.boolean().optional(),
+  idempotencyKey: z.string().min(8).max(64).optional(),
+});
+
 export const acceptSchema = z.object({
   idempotencyKey: z.string().min(8).max(64),
 });
@@ -74,6 +84,11 @@ export const completeSchema = z.object({
   collectedCash: z.boolean().default(true),
   /** Why cash was not collected (collectedCash=false). */
   notCollectedReason: z.enum(['receiver_refused', 'rider_refused', 'other']).optional(),
+});
+
+export const boostSchema = z.object({
+  /** TOTAL boost wanted (paise), not an increment: a double tap can never charge twice. */
+  boostPaise: z.number().int().positive(),
 });
 
 export const rateSchema = z.object({

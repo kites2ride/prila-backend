@@ -16,6 +16,10 @@ export type DispatchConfig = {
   persistIntervalSec: number;
   maxAccuracyM: number;
   maxSpeedMps: number;
+  /** Rider can raise the fare in steps of this (paise) while no pilot accepts. */
+  boostStepPaise: number;
+  /** Most a rider can add in total (paise). 0 = feature off. */
+  boostMaxPaise: number;
 };
 
 export type SurgeConfig = {
@@ -42,6 +46,8 @@ const dispatchDefaults: DispatchConfig = {
   persistIntervalSec: 30,
   maxAccuracyM: 50,
   maxSpeedMps: 55, // ~200 km/h hard gate for spoof / teleport
+  boostStepPaise: 1000, // ₹10
+  boostMaxPaise: 5000, // ₹50
 };
 
 const surgeDefaults: SurgeConfig = {

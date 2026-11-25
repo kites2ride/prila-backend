@@ -217,6 +217,8 @@ export const dispatchValueSchema = z
     persistIntervalSec: z.number().int().min(5).max(600).default(30),
     maxAccuracyM: z.number().int().min(5).max(500).default(50),
     maxSpeedMps: z.number().min(5).max(120).default(55),
+    boostStepPaise: z.number().int().min(100).max(10000).default(1000),
+    boostMaxPaise: z.number().int().min(0).max(50000).default(5000),
   })
   .refine((v) => v.offerTimeoutSec < v.maxSearchSec, {
     path: ['maxSearchSec'],

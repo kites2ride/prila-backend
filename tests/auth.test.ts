@@ -118,4 +118,33 @@ describe('auth', () => {
     expect(refreshed.statusCode).toBe(200);
     expect(refreshed.json().data.accessToken).toBeTruthy();
   });
+
+  it('GET /rider/me returns the account creation date of the signed-in rider', async () => {
+    const reqRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/request',
+      payload: { phone: '9123456780', app: 'customer' },
+    });
+    const code = reqRes.json().data.debugCode;
+    const before = Date.now();
+    const verify = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/verify',
+      payload: { phone: '9123456780', app: 'customer', code },
+    });
+    const token = verify.json().data.accessToken;
+
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/v1/rider/me',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+    const created = new Date(me.json().data.createdAt).getTime();
+    expect(created).toBeGreaterThan(before - 5000);
+    expect(created).toBeLessThanOrEqual(Date.now());
+
+    const anon = await app.inject({ method: 'GET', url: '/api/v1/rider/me' });
+    expect(anon.statusCode).toBe(401);
+  });
 });

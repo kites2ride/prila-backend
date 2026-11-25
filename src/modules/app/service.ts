@@ -16,6 +16,7 @@ import {
 import type { z } from 'zod';
 import { serviceAreaFor } from '../zones/service.js';
 import { getMapsConfig } from '../maps/config.js';
+import { getDispatchConfig } from '../dispatch/config.js';
 
 type ConfigKey = z.infer<typeof configKeySchema>;
 type BootstrapQuery = z.infer<typeof bootstrapQuerySchema>;
@@ -174,6 +175,7 @@ export async function bootstrap(query: BootstrapQuery) {
 
   const appValue = (appCfg?.value ?? {}) as Record<string, unknown>;
   const matchingValue = (matching?.value ?? {}) as Record<string, unknown>;
+  const dispatchCfg = await getDispatchConfig();
   const supportValue = (support?.value ?? {}) as Record<string, unknown>;
   const maintenanceValue = (maintenance?.value ?? { enabled: false }) as {
     enabled: boolean;
@@ -220,6 +222,8 @@ export async function bootstrap(query: BootstrapQuery) {
       acceptTimeoutSec: matchingValue.acceptTimeoutSec ?? 15,
       searchRadiusM: matchingValue.searchRadiusM ?? 3000,
       maxSearchTimeSec: matchingValue.maxSearchTimeSec ?? 120,
+      boostStepPaise: dispatchCfg.boostStepPaise,
+      boostMaxPaise: dispatchCfg.boostMaxPaise,
     },
     support: supportValue,
     languages: (appValue.languages as string[]) ?? ['en', 'te'],

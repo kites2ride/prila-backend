@@ -76,6 +76,8 @@ const pilotSchema = new Schema(
     photoKey: { type: String },
     /** Count of rides this pilot cancelled after accepting (no penalty yet; visible to ops). */
     cancelCount: { type: Number, default: 0 },
+    /** Times riders cancelled because of this pilot (asked to cancel, extra money, unreachable, ...). Ops review. */
+    cancellationFlags: { type: Number, default: 0 },
     online: { type: Boolean, default: false },
     idle: { type: Boolean, default: true },
     shaktiOptIn: { type: Boolean, default: false },

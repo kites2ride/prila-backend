@@ -51,10 +51,12 @@ export async function settleRideCompletion(rideId: string) {
 
   const grossPaise = ride.fareTotalPaise ?? ride.fare?.totalPaise ?? 0;
   const cityId = String(ride.cityId);
+  // A rider's fare boost goes to the pilot in full: commission is taken on the fare WITHOUT it.
+  const boostPaise = Math.min(ride.boostPaise ?? 0, grossPaise);
   const commission = await resolveCommission({
     cityId,
     serviceType: ride.serviceType ?? 'bike',
-    grossPaise,
+    grossPaise: grossPaise - boostPaise,
   });
   const platformFeePaise = ride.fare?.platformFeePaise ?? 0;
   const totalPlatform = commission.commissionPaise + platformFeePaise;

@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { ok } from '../../lib/envelope.js';
+import { authenticateRider } from '../../plugins/auth.js';
+import { AppError } from '../../lib/errors.js';
+import { Rider } from './model.js';
 import { adminLoginSchema, otpRequestSchema, otpVerifySchema, refreshSchema } from './schemas.js';
 import * as authService from './service.js';
 
@@ -20,6 +23,13 @@ export async function authRoutes(app: FastifyInstance) {
       const data = await authService.verifyOtp(app, body);
       return reply.send(ok(data));
     },
+  });
+
+  /** The signed-in rider's own account facts. `createdAt` = when the account was created (profile "Member since"). */
+  app.get('/rider/me', { preHandler: authenticateRider }, async (req, reply) => {
+    const rider = await Rider.findById(req.user.sub).select('createdAt').lean();
+    if (!rider) throw new AppError('NOT_FOUND', 'Rider not found', 404);
+    return reply.send(ok({ id: String(rider._id), createdAt: rider.createdAt }));
   });
 
   app.post('/auth/refresh', {

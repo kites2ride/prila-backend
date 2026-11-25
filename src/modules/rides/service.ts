@@ -11,7 +11,7 @@ import { reverse as reverseGeocode, routeForEstimate } from '../maps/service.js'
 import { isRealPlaceName } from '../places/service.js';
 import { assertPilotInServiceArea, assertTripInServiceArea } from '../zones/service.js';
 import {
-  getDispatchConfig,
+  getDispatchConfig,  
   getSurgeMultiplier,
   ingestPilotLocation,
   markDirty,
@@ -23,6 +23,7 @@ import {
   releaseOtherOffers,
   runBatchOffer,
 } from '../dispatch/index.js';
+import { blockPilotForRider, blockedPilotIds, calculateCancellationFee, isPilotFaultReason } from './cancelPolicy.js';
 import { findCandidatePilots, getCustomerFlags, getMatchingConfig } from './matching.js';
 import { Ride, RideQuote, type RideStatus } from './model.js';
 import {
@@ -322,6 +323,73 @@ export async function book(
   return serializeRide(fresh!, { includeOtp: true });
 }
 
+/**
+ * The rider raises the fare while we are finding a pilot, or after "no pilots nearby". The extra goes to
+ * the pilot untouched (settlement keeps it out of the commission base) and the search starts again.
+ *
+ * `boostPaise` is the TOTAL boost wanted, not an increment, so a double tap or a retry can never
+ * charge twice. Limits (step, cap, on/off) come from the admin dispatch config.
+ */
+export async function boostRide(app: FastifyInstance, riderId: string, rideId: string, boostPaise: number) {
+  const cfg = await getDispatchConfig();
+  const ride = await Ride.findOne({ _id: rideId, riderId });
+  if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
+  if (ride.status !== 'searching' && ride.status !== 'no_pilot_found') {
+    throw new AppError('RIDE_STATE_INVALID', 'The fare can only be raised while we are finding a pilot', 409);
+  }
+  if (cfg.boostMaxPaise <= 0) throw new AppError('BOOST_DISABLED', 'Raising the fare is not available right now', 400);
+
+  const current = ride.boostPaise ?? 0;
+  if (boostPaise === current) return serializeRide(ride, { includeOtp: true }); // same request again: no-op
+  if (boostPaise < current) throw new AppError('BOOST_INVALID', 'The extra can only go up', 400);
+  if (boostPaise > cfg.boostMaxPaise) {
+    throw new AppError('BOOST_INVALID', `You can add at most ₹${cfg.boostMaxPaise / 100}`, 400);
+  }
+  if (boostPaise % cfg.boostStepPaise !== 0) {
+    throw new AppError('BOOST_INVALID', `Add in steps of ₹${cfg.boostStepPaise / 100}`, 400);
+  }
+
+  const baseTotal = (ride.fareTotalPaise ?? 0) - current;
+  const newTotal = baseTotal + boostPaise;
+  const reopened = ride.status === 'no_pilot_found';
+  // Guarded on status + current total, so two quick requests cannot both apply.
+  const updated = await Ride.findOneAndUpdate(
+    { _id: rideId, riderId, status: ride.status, fareTotalPaise: ride.fareTotalPaise },
+    { $set: { boostPaise, fareTotalPaise: newTotal, 'fare.boostPaise': boostPaise, 'fare.totalPaise': newTotal } },
+    { new: true },
+  );
+  if (!updated) throw new AppError('RIDE_STATE_INVALID', 'The ride just changed, please try again', 409);
+
+  if (reopened) {
+    const matching = await getMatchingConfig();
+    const searchSec = cfg.enabled ? cfg.maxSearchSec : matching.maxSearchTimeSec;
+    await transition(
+      rideId,
+      'no_pilot_found',
+      'searching',
+      {
+        searchStartedAt: new Date(),
+        searchExpiresAt: new Date(Date.now() + searchSec * 1000),
+        offeredPilotIds: [], // pilots who timed out may take it now that it pays more
+      },
+      'rider',
+      riderId,
+    );
+    const flags = await getCustomerFlags();
+    const shaktiStrict = Boolean(ride.shakti && flags.prila_shakti && flags.prila_shakti_strict !== false);
+    if (cfg.enabled) {
+      await runBatchOffer(app, rideId, { shaktiStrict });
+    } else {
+      await offerBatchLegacy(app, rideId, shaktiStrict);
+    }
+  }
+  // A search already running picks the new fare up with its next batch of offers.
+
+  emitToRider(app, riderId, 'ride:updated', { rideId });
+  const fresh = await Ride.findById(rideId);
+  return serializeRide(fresh!, { includeOtp: true });
+}
+
 /** Rollback path when dispatch.enabled=false — Mongo $geoNear batch offer. */
 async function offerBatchLegacy(app: FastifyInstance, rideId: string, shaktiStrict: boolean) {
   const ride = await Ride.findById(rideId);
@@ -336,7 +404,8 @@ async function offerBatchLegacy(app: FastifyInstance, rideId: string, shaktiStri
   const coords = ride.pickup?.location?.coordinates ?? [79.5941, 17.9689];
   const lng = coords[0] ?? 79.5941;
   const lat = coords[1] ?? 17.9689;
-  const exclude = [...(ride.offeredPilotIds ?? []), ...(ride.skippedPilotIds ?? [])];
+  const blocked = (await blockedPilotIds(ride.riderId)).map((id) => new Types.ObjectId(id));
+  const exclude = [...(ride.offeredPilotIds ?? []), ...(ride.skippedPilotIds ?? []), ...blocked];
   const candidates = await findCandidatePilots({
     lng,
     lat,
@@ -585,6 +654,7 @@ export async function cancel(
   rideId: string,
   reasonCode: string,
   reasonText?: string,
+  opts: { feePaise?: number } = {},
 ) {
   const ride = await Ride.findById(rideId);
   if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
@@ -599,9 +669,10 @@ export async function cancel(
   }
 
   const fee =
-    ['pilot_assigned', 'pilot_arriving', 'pilot_arrived'].includes(ride.status) && actor.role === 'rider'
+    opts.feePaise ??
+    (['pilot_assigned', 'pilot_arriving', 'pilot_arrived'].includes(ride.status) && actor.role === 'rider'
       ? ride.fare?.cancellationFeePaise ?? 0
-      : 0;
+      : 0);
 
   const updated = await transition(
     rideId,
@@ -610,6 +681,7 @@ export async function cancel(
     {
       cancelReasonCode: reasonCode,
       cancelReasonText: reasonText,
+      cancellationFeePaise: fee,
       platformRevenuePaise: (ride.platformRevenuePaise ?? 0) + fee,
     },
     actor.role === 'admin' ? 'admin' : actor.role,
@@ -624,6 +696,106 @@ export async function cancel(
   }
   emitToRider(app, String(ride.riderId), 'ride:updated', { rideId });
   return serializeRide(updated);
+}
+
+/* ───────────────────────── rider cancel (reason + fee + pilot block + rematch) ───────────────────────── */
+
+const RIDER_CANCELLABLE: RideStatus[] = ['requested', 'searching', 'pilot_assigned', 'pilot_arriving', 'pilot_arrived'];
+
+/**
+ * Rider cancels. Free while searching, for pilot-fault reasons, and inside the grace window; otherwise the
+ * fare rule's fee applies (default 0). A pilot-fault reason blocks that pilot for this rider for 30 minutes
+ * and bumps the pilot's cancellationFlags. `rematch` keeps the ride and searches again without that pilot.
+ */
+export async function riderCancel(
+  app: FastifyInstance,
+  riderId: string,
+  rideId: string,
+  body: { reasonCode: string; reasonText?: string; rematch?: boolean },
+) {
+  const ride = await Ride.findOne({ _id: rideId, riderId });
+  if (!ride) throw new AppError('NOT_FOUND', 'Ride not found', 404);
+  if (ride.status === 'cancelled_by_rider') return serializeRide(ride); // retry / double tap
+  if (ride.status === 'in_progress') {
+    throw new AppError('RIDE_IN_PROGRESS', 'The trip has started. Call Prila support to cancel it.', 409);
+  }
+  if (!RIDER_CANCELLABLE.includes(ride.status as RideStatus)) {
+    throw new AppError('RIDE_STATE_INVALID', 'This ride can no longer be cancelled', 409);
+  }
+
+  const pilotId = ride.pilotId ? String(ride.pilotId) : null;
+  const faultReason = isPilotFaultReason(body.reasonCode);
+  if (body.rematch && !(faultReason && pilotId)) {
+    throw new AppError('VALIDATION_ERROR', 'Find another Captain needs a Captain-related reason', 400);
+  }
+  const fee = calculateCancellationFee(ride, body.reasonCode);
+
+  if (pilotId && faultReason) {
+    await blockPilotForRider({ riderId, pilotId, rideId, reasonCode: body.reasonCode });
+    await Pilot.updateOne({ _id: pilotId }, { $inc: { cancellationFlags: 1 } });
+  }
+
+  if (!body.rematch) {
+    const ended = await cancel(app, { id: riderId, role: 'rider' }, rideId, body.reasonCode, body.reasonText, { feePaise: fee });
+    if (pilotId) {
+      void notifyUser('pilot', pilotId, 'Ride cancelled', 'The rider cancelled this ride.', {
+        rideId,
+        deepLink: 'prilapilot://home',
+      });
+    }
+    return ended;
+  }
+
+  // Rematch: same ride goes back to searching, previous pilot excluded.
+  const dispatchCfg = await getDispatchConfig();
+  const matching = await getMatchingConfig();
+  const searchSec = dispatchCfg.enabled ? dispatchCfg.maxSearchSec : matching.maxSearchTimeSec;
+  const now = new Date();
+  const updated = await Ride.findOneAndUpdate(
+    { _id: rideId, riderId, pilotId, status: { $in: ['pilot_assigned', 'pilot_arriving', 'pilot_arrived'] } },
+    {
+      $set: {
+        status: 'searching',
+        pilotId: null,
+        acceptDeadlineAt: null,
+        lastPilotLocation: null,
+        lastPilotLocationAt: null,
+        pickupEtaSec: null,
+        searchStartedAt: now,
+        searchExpiresAt: new Date(now.getTime() + searchSec * 1000),
+      },
+      $addToSet: { skippedPilotIds: new Types.ObjectId(pilotId!) },
+      $push: {
+        timeline: {
+          at: now,
+          from: ride.status,
+          to: 'searching',
+          actor: 'rider',
+          actorId: riderId,
+          note: `rider_rematch:${body.reasonCode}`,
+        },
+      },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!updated) throw new AppError('RIDE_STATE_INVALID', 'Ride changed. Refresh and try again.', 409);
+
+  await Pilot.updateOne({ _id: pilotId }, { $set: { idle: true } });
+  markPilotIdle(pilotId!);
+  markDirty(pilotId!);
+  emitToPilot(app, pilotId!, 'ride:updated', { rideId });
+  emitToRider(app, riderId, 'ride:updated', { rideId });
+  void notifyUser('pilot', pilotId!, 'Ride cancelled', 'The rider cancelled this ride.', {
+    rideId,
+    deepLink: 'prilapilot://home',
+  });
+
+  const flags = await getCustomerFlags();
+  const shaktiStrict = Boolean(updated.shakti && flags.prila_shakti && flags.prila_shakti_strict !== false);
+  if (dispatchCfg.enabled) await runBatchOffer(app, rideId, { shaktiStrict });
+  else await offerBatchLegacy(app, rideId, shaktiStrict);
+  const fresh = await Ride.findById(rideId);
+  return serializeRide(fresh ?? updated);
 }
 
 export async function rate(
@@ -798,6 +970,8 @@ export function serializeRide(
     routePolyline: o.routePolyline ?? null,
     fare: o.fare,
     fareTotalPaise: o.fareTotalPaise,
+    /** What the rider added to attract a pilot; already inside fareTotalPaise. */
+    boostPaise: o.boostPaise ?? 0,
     pilotNetPaise: o.pilotNetPaise,
     commissionPaise: o.commissionPaise,
     paymentMethod: o.paymentMethod,
@@ -818,6 +992,8 @@ export function serializeRide(
     riderRating: o.riderRating,
     pilotRating: o.pilotRating,
     cancelReasonCode: o.cancelReasonCode,
+    /** Fee (paise) if the rider cancels now for a rider-side reason; pilot-fault reasons are always free. */
+    cancelFeePaise: calculateCancellationFee(o, 'PLAN_CHANGED'),
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
   };

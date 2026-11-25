@@ -5,6 +5,7 @@ import {
   acceptSchema,
   bookSchema,
   cancelSchema,
+  riderCancelSchema,
   completeSchema,
   estimateSchema,
   locationSchema,
@@ -15,6 +16,7 @@ import {
   startSchema,
   pilotCancelSchema,
   resolvePaymentIssueSchema,
+  boostSchema,
 } from './schemas.js';
 import * as rideService from './service.js';
 import { pageSchema } from '../admin/schemas.js';
@@ -76,16 +78,17 @@ export async function rideRoutes(app: FastifyInstance) {
     return reply.send(ok(data));
   });
 
+  app.post('/rides/:id/boost', { preHandler: authenticateRider }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const body = boostSchema.parse(req.body);
+    const data = await rideService.boostRide(app, req.user.sub, id, body.boostPaise);
+    return reply.send(ok(data));
+  });
+
   app.post('/rides/:id/cancel', { preHandler: authenticateRider }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
-    const body = cancelSchema.parse(req.body);
-    const data = await rideService.cancel(
-      app,
-      { id: req.user.sub, role: 'rider' },
-      id,
-      body.reasonCode,
-      body.reasonText,
-    );
+    const body = riderCancelSchema.parse(req.body);
+    const data = await rideService.riderCancel(app, req.user.sub, id, body);
     return reply.send(ok(data));
   });
 

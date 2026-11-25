@@ -88,6 +88,8 @@ export const DISPATCH_FIELDS: FieldSpec[] = [
   int('sweepIntervalSec', 'Stale sweep interval', 'How often stale pilot locations are cleared.', 'Location handling', 10, 1, 120, 's', { restart: true }),
   int('persistIntervalSec', 'Location save interval', 'How often in-memory locations are saved to the database.', 'Location handling', 30, 5, 600, 's', { restart: true }),
   int('maxAccuracyM', 'Max GPS error', 'Location fixes less accurate than this are ignored.', 'Spoof protection', 50, 5, 500, 'm'),
+  int('boostStepPaise', 'Fare boost step', 'While no pilot accepts, the rider can raise the fare in steps of this amount. 1000 = ₹10.', 'Fare boost', 1000, 100, 10000, 'paise'),
+  int('boostMaxPaise', 'Max fare boost', 'The most a rider can add to the fare in total. The whole extra goes to the pilot (no commission). 5000 = ₹50. 0 turns the feature off.', 'Fare boost', 5000, 0, 50000, 'paise'),
   num('maxSpeedMps', 'Max plausible speed', 'Jumps faster than this are rejected as GPS spoofing. 55 m/s is about 200 km/h.', 'Spoof protection', 55, 5, 120, 1, 'm/s'),
 ];
 

@@ -36,7 +36,7 @@ const TRANSITIONS: Record<RideStatus, RideStatus[]> = {
   cancelled_by_rider: [],
   cancelled_by_pilot: [],
   cancelled_by_system: [],
-  no_pilot_found: [],
+  no_pilot_found: ['searching'], // rider raised the fare: search again
 };
 
 export function canTransition(from: RideStatus, to: RideStatus): boolean {

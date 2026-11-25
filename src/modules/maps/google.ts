@@ -181,10 +181,21 @@ export async function reverseGeocode(input: {
     throw new GoogleError('reverseGeocode', status);
   }
   // Skip plus-code-only results ("XQ9+2V Hanamkonda") — not useful to riders.
-  const best = (json?.results ?? []).find(
-    (r) => r.formatted_address && !(r.types ?? []).includes('plus_code'),
-  );
-  return best?.formatted_address ?? null;
+  // Address results can also START with a plus code ("692V+94P, Main Rd, Huzurabad…") when the spot has
+  // no street number; strip it, and skip results that are nothing but a code.
+  for (const r of json?.results ?? []) {
+    if (!r.formatted_address || (r.types ?? []).includes('plus_code')) continue;
+    const cleaned = stripLeadingPlusCode(r.formatted_address);
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
+const LEADING_PLUS_CODE = /^[23456789CFGHJMPQRVWX]{4,8}\+[23456789CFGHJMPQRVWX]{2,3}\s*(?:,\s*|\s+|$)/i;
+
+/** "6C29+C67, Ranganayakula Gutta Rd, Karimnagar" → "Ranganayakula Gutta Rd, Karimnagar"; code-only → "". */
+export function stripLeadingPlusCode(address: string): string {
+  return address.trim().replace(LEADING_PLUS_CODE, '').trim();
 }
 
 export type TravelMode = 'DRIVE' | 'TWO_WHEELER';

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { Types } from 'mongoose';
+import { blockedPilotIds } from '../rides/cancelPolicy.js';
 import { Ride } from '../rides/model.js';
 import { assertTransition } from '../rides/stateMachine.js';
 import { findCandidates } from './candidates.js';
@@ -41,6 +42,7 @@ export async function runBatchOffer(
   const exclude = [
     ...(ride.offeredPilotIds ?? []).map(String),
     ...(ride.skippedPilotIds ?? []).map(String),
+    ...(await blockedPilotIds(ride.riderId)), // pilots this rider cancelled on in the last 30 min
   ];
 
   emitRider(app, String(ride.riderId), 'dispatch:searching', { rideId });

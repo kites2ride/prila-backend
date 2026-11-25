@@ -260,3 +260,11 @@ describe('bootstrap maps hints', () => {
     expect(res.json().data.maps).toEqual({ autocompleteMinChars: 2, autocompleteDebounceMs: 350 });
   });
 });
+
+describe('recent places speed', () => {
+  it('a rider\'s newest rides are served from an index (no scan + sort of every ride)', async () => {
+    const { Ride } = await import('../src/modules/rides/model.js');
+    const indexes = Ride.schema.indexes().map(([keys]) => JSON.stringify(keys));
+    expect(indexes).toContain(JSON.stringify({ riderId: 1, createdAt: -1 }));
+  });
+});
