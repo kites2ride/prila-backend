@@ -121,7 +121,7 @@ export async function autocomplete(
   const bias = await biasCentre(input.lat, input.lng);
   let googleItems: google.Suggestion[];
   try {
-    googleItems = await google.autocomplete({
+    const base = {
       q,
       sessionToken: input.sessionToken,
       bias: bias ?? { lat: 20.5937, lng: 78.9629 }, // India centroid if no city configured yet
@@ -129,7 +129,17 @@ export async function autocomplete(
       languageCode: cfg.languageCode,
       regionCode: cfg.regionCode,
       timeoutMs: cfg.timeoutMs,
-    });
+    };
+    // locationBias is only a soft hint: a prominent place 30 km away can outrank a nearby one
+    // for partial text. When we know where the rider is, hard-limit to the radius first and
+    // only fall back to the soft bias (far places) when nothing nearby matches.
+    googleItems = bias ? await google.autocomplete({ ...base, restrict: true }) : [];
+    if (googleItems.length === 0) googleItems = await google.autocomplete(base);
+    // Nearest first (stable for items without a distance).
+    googleItems = googleItems
+      .map((g, i) => ({ g, i }))
+      .sort((a, b) => (a.g.distanceM ?? Infinity) - (b.g.distanceM ?? Infinity) || a.i - b.i)
+      .map((x) => x.g);
   } catch (err) {
     const wrapped = wrapGoogle('autocomplete', err); // logs status only
     if (local.length) return { suggestions: local };

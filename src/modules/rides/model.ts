@@ -172,6 +172,7 @@ const rideSchema = new Schema(
     },
     lastPilotLocation: pointSchema,
     lastPilotLocationAt: { type: Date },
+    lastPilotHeading: { type: Number },
   },
   { timestamps: true },
 );

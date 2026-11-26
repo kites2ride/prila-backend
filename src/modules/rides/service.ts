@@ -933,21 +933,28 @@ export async function updatePilotLocation(
     status: { $in: ['pilot_assigned', 'pilot_arriving', 'pilot_arrived', 'in_progress'] },
   });
   if (ride && result.ok) {
+    const heading = result.state.headingDeg != null ? ((result.state.headingDeg % 360) + 360) % 360 : 0;
     await Ride.updateOne(
       { _id: ride._id },
       {
         $set: {
           lastPilotLocation: point(loc.lng, loc.lat),
           lastPilotLocationAt: new Date(),
+          lastPilotHeading: heading,
         },
       },
     );
-    app.io?.of('/rider').to(`ride:${ride._id}`).emit('ride:location', {
+    const payload = {
       rideId: String(ride._id),
       lat: loc.lat,
       lng: loc.lng,
+      heading,
+      vehicleType: result.state.vehicleType ?? null,
       at: new Date().toISOString(),
-    });
+    };
+    const room = app.io?.of('/rider').to(`ride:${ride._id}`);
+    room?.emit('ride:location', payload); // existing event name, kept for current clients
+    room?.emit('pilot:location_update', payload);
   }
   return {
     ok: result.ok,
@@ -994,6 +1001,7 @@ export function serializeRide(
     timeline: o.timeline,
     lastPilotLocation: o.lastPilotLocation,
     lastPilotLocationAt: o.lastPilotLocationAt,
+    lastPilotHeading: o.lastPilotHeading ?? null,
     startOtp: opts?.includeOtp ? o.startOtpHint : undefined,
     riderRating: o.riderRating,
     pilotRating: o.pilotRating,

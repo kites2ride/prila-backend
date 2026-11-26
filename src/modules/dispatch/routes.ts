@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { ok } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
-import { authenticateAdmin } from '../../plugins/auth.js';
+import { authenticateAdmin, authenticateRider } from '../../plugins/auth.js';
+import {
+  NEARBY_DEFAULT_RADIUS_KM,
+  NEARBY_MAX_RADIUS_KM,
+  NEARBY_SERVICE_TYPES,
+  findNearbyPilots,
+} from './nearby.js';
 import { Ride } from '../rides/model.js';
 import { getDispatchConfig, getSurgeConfig } from './config.js';
 import { cellBoundary } from './h3.js';
@@ -15,7 +21,21 @@ const cityQuery = z.object({
   cityId: z.string().refine((v) => /^[a-f\d]{24}$/i.test(v), 'cityId must be a city id'),
 });
 
+const nearbyQuery = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  serviceType: z.enum(NEARBY_SERVICE_TYPES),
+  radiusKm: z.coerce.number().positive().max(NEARBY_MAX_RADIUS_KM).default(NEARBY_DEFAULT_RADIUS_KM),
+});
+
 export async function dispatchRoutes(app: FastifyInstance) {
+  /** Rider map: up to 12 idle pilots near a point for one service type. */
+  app.get('/pilots/nearby', { preHandler: authenticateRider }, async (req, reply) => {
+    const q = nearbyQuery.parse(req.query);
+    const pilots = await findNearbyPilots(q);
+    return reply.send(ok({ pilots }));
+  });
+
   /** City live map (admin, polled every 5 s): pilots, live rides, counts. */
   app.get('/admin/dispatch/live', { preHandler: authenticateAdmin }, async (req, reply) => {
     const { cityId } = cityQuery.parse(req.query);

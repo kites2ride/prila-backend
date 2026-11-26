@@ -18,7 +18,8 @@ export const FIELD_MASKS = {
   autocomplete:
     'suggestions.placePrediction.placeId,' +
     'suggestions.placePrediction.structuredFormat.mainText.text,' +
-    'suggestions.placePrediction.structuredFormat.secondaryText.text',
+    'suggestions.placePrediction.structuredFormat.secondaryText.text,' +
+    'suggestions.placePrediction.distanceMeters',
   // Essentials SKU only. displayName (Pro SKU) is skipped on purpose: the app already
   // has the place name from the autocomplete suggestion's mainText.
   placeDetails: 'location,formattedAddress',
@@ -72,29 +73,34 @@ function headers(fieldMask: string): Record<string, string> {
   };
 }
 
-export type Suggestion = { placeId: string; mainText: string; secondaryText: string };
+export type Suggestion = { placeId: string; mainText: string; secondaryText: string; distanceM?: number };
 
 export async function autocomplete(input: {
   q: string;
   sessionToken: string;
   bias: LatLng;
   biasRadiusM: number;
+  /** true = hard-limit results to the circle (locationRestriction); false = soft locationBias. */
+  restrict?: boolean;
   languageCode: string;
   regionCode: string;
   timeoutMs: number;
 }): Promise<Suggestion[]> {
+  const circle = {
+    circle: {
+      center: { latitude: input.bias.lat, longitude: input.bias.lng },
+      radius: input.biasRadiusM,
+    },
+  };
   const body = {
     input: input.q,
     sessionToken: input.sessionToken,
     languageCode: input.languageCode,
     regionCode: input.regionCode.toLowerCase(),
     includedRegionCodes: [input.regionCode.toLowerCase()],
-    locationBias: {
-      circle: {
-        center: { latitude: input.bias.lat, longitude: input.bias.lng },
-        radius: input.biasRadiusM,
-      },
-    },
+    // origin makes Google return distanceMeters so we can sort nearest-first.
+    origin: { latitude: input.bias.lat, longitude: input.bias.lng },
+    ...(input.restrict ? { locationRestriction: circle } : { locationBias: circle }),
   };
   const json = (await call(
     'autocomplete',
@@ -105,6 +111,7 @@ export async function autocomplete(input: {
     suggestions?: Array<{
       placePrediction?: {
         placeId?: string;
+        distanceMeters?: number;
         structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
       };
     }>;
@@ -118,6 +125,7 @@ export async function autocomplete(input: {
       placeId: p.placeId,
       mainText: p.structuredFormat?.mainText?.text ?? '',
       secondaryText: p.structuredFormat?.secondaryText?.text ?? '',
+      distanceM: typeof p.distanceMeters === 'number' ? p.distanceMeters : undefined,
     });
   }
   return out;
