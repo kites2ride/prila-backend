@@ -55,6 +55,8 @@ export async function sendPush(input: {
   body: string;
   data?: Record<string, string>;
   silent?: boolean;
+  /** Custom alert sound — Android channel + file in res/raw, iOS bundled file. */
+  sound?: { androidChannelId: string; androidSound: string; iosSound: string };
 }): Promise<{ ok: boolean; id?: string; reason?: string }> {
   if (!messaging) return { ok: false, reason: 'fcm_disabled' };
   const message: Record<string, unknown> = {
@@ -62,6 +64,16 @@ export async function sendPush(input: {
   };
   if (!input.silent) {
     message.notification = { title: input.title, body: input.body };
+  }
+  if (input.sound && !input.silent) {
+    message.android = {
+      priority: 'high',
+      notification: { channelId: input.sound.androidChannelId, sound: input.sound.androidSound },
+    };
+    message.apns = {
+      headers: { 'apns-priority': '10' },
+      payload: { aps: { sound: input.sound.iosSound } },
+    };
   }
   if (input.token) message.token = input.token;
   if (input.topic) message.topic = input.topic;

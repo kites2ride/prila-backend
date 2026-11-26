@@ -83,13 +83,41 @@ export async function pushToUser(
   title: string,
   body: string,
   data?: Record<string, string>,
+  sound?: Parameters<typeof sendPush>[0]['sound'],
 ) {
   const tokens = await getUserPushTokens(typ, userId);
   const results = [];
   for (const token of tokens) {
-    results.push(await sendPush({ token, title, body, data }));
+    try {
+      results.push(await sendPush({ token, title, body, data, sound }));
+    } catch (err) {
+      results.push({ ok: false, reason: String(err) });
+    }
   }
   return { sent: results.filter((r) => r.ok).length, attempted: results.length, results };
+}
+
+/** Matches the Android channel + bundled sound file in the pilot app. */
+export const RIDE_REQUEST_SOUND = {
+  androidChannelId: 'ride_requests_v2',
+  androidSound: 'ride_request',
+  iosSound: 'ride_request.wav',
+} as const;
+
+/** Wake a pilot (app closed / backgrounded) with the ride-request chime. Fire and forget. */
+export function pushRideOffer(pilotIds: string[], rideId: string): void {
+  for (const pilotId of pilotIds) {
+    void pushToUser(
+      'pilot',
+      pilotId,
+      'New ride request',
+      'Tap to view and accept',
+      { type: 'ride_offer', rideId },
+      RIDE_REQUEST_SOUND,
+    ).catch(() => {
+      /* push optional */
+    });
+  }
 }
 
 export async function permissionStats() {

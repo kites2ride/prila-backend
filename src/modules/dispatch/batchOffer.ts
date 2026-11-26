@@ -102,6 +102,12 @@ export async function runBatchOffer(
   for (const c of candidates) {
     emitPilot(app, c.pilotId, 'ride:offer', payload);
   }
+  void import('../push/devices.js').then((m) =>
+    m.pushRideOffer(
+      candidates.map((c) => c.pilotId),
+      rideId,
+    ),
+  );
 
   await appendLog(rideId, {
     at: new Date().toISOString(),

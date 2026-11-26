@@ -456,6 +456,12 @@ async function offerBatchLegacy(app: FastifyInstance, rideId: string, shaktiStri
   for (const p of candidates) {
     emitToPilot(app, String(p._id), 'ride:offer', payload);
   }
+  void import('../push/devices.js').then((m) =>
+    m.pushRideOffer(
+      candidates.map((p) => String(p._id)),
+      rideId,
+    ),
+  );
 
   setTimeout(() => {
     void onOfferTimeoutLegacy(app, rideId, shaktiStrict);
