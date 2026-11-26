@@ -35,7 +35,7 @@ export async function requestOtp(
   await sendOtpSms(phone, code, app.log);
 
   const payload: { expiresInSec: number; debugCode?: string } = { expiresInSec: 300 };
-  if (env().ALLOW_OTP_DEBUG) {
+  if (env().ALLOW_OTP_DEBUG || env().DEMO_OTP_AUTOFILL) {
     payload.debugCode = code;
   }
   return payload;

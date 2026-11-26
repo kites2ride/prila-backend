@@ -44,6 +44,15 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true' || v === '1'),
+  /**
+   * TEMPORARY demo switch (business review, SMS not configured yet).
+   * ON unless set to 'false'/'0'. Returns the OTP in the request response so the
+   * app autofills it. REMOVE / set DEMO_OTP_AUTOFILL=false once SMS is live.
+   */
+  DEMO_OTP_AUTOFILL: z
+    .string()
+    .optional()
+    .transform((v) => !(v === 'false' || v === '0')),
   SMS_PROVIDER: z.string().optional().default(''),
   SMS_API_KEY: z.string().optional().default(''),
   SMS_SENDER_ID: z.string().optional().default(''),
